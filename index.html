@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TagsFlow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Lato:wght@400;700&family=Montserrat:wght@400;700&family=Poppins:wght@400;700&family=Roboto+Slab:wght@400;700&display=swap" rel="stylesheet">
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.1.1/",
+    "react": "https://aistudiocdn.com/react@^19.1.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.1.1",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.544.0",
+    "jspdf": "https://aistudiocdn.com/jspdf@^2.5.1",
+    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5",
+    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.80.0",
+    "jspdf-autotable": "https://aistudiocdn.com/jspdf-autotable@^5.0.2",
+    "@stripe/stripe-js": "https://aistudiocdn.com/@stripe/stripe-js@^4.4.0",
+    "canvas-confetti": "https://aistudiocdn.com/canvas-confetti@^1.9.2",
+    "react-router-dom": "https://esm.sh/react-router-dom@6.22.3?external=react,react-dom",
+    "react-router": "https://esm.sh/react-router@6.22.3?external=react,react-dom",
+    "@remix-run/router": "https://esm.sh/@remix-run/router@1.15.3?external=react,react-dom"
+  }
+}
+</script>
+<style id="theme-style">
+  html {
+    scroll-behavior: smooth;
+    color-scheme: light;
+  }
+  
+  :root {
+    --font-size-dynamic: 16px;
+    --font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+
+    /* New Light Theme Palette */
+    --color-bg: #F8F9FA; /* Pastel white */
+    --color-surface: #FFFFFF; /* Pure white for cards */
+    --color-surface-secondary: #F1F5F9; /* slate-100 for inputs, alt rows */
+    --color-surface-tertiary: #E2E8F0; /* slate-200 for hovers */
+    --color-border: #E2E8F0; /* slate-200 */
+
+    --color-text-primary: #1E293B; /* slate-800 */
+    --color-text-secondary: #64748B; /* slate-500 */
+    --color-text-inverted: #FFFFFF;
+
+    /* Primary Accent (Blue) */
+    --color-primary: #3B82F6; /* blue-500 */
+    --color-primary-text: #FFFFFF;
+    --color-primary-hover: #2563EB; /* blue-600 */
+    --color-primary-bg-subtle: #DBEAFE; /* blue-100 */
+    --color-primary-text-subtle: #1E40AF; /* blue-800 */
+    
+    /* Marketplace Accents - Refined for a business look */
+    --color-ml: #B47F21; /* Refined Gold */
+    --color-ml-text: #FFFFFF;
+    --color-shopee: #0A4A6C; /* Deep Corporate Teal/Blue */
+    --color-shopee-text: #FFFFFF;
+    --color-multi-sku: #475569; /* Slate 600 */
+    --color-multi-sku-text: #FFFFFF;
+    
+    /* Card Styles */
+    --card-bg: var(--color-surface);
+    --card-border: var(--color-border);
+    --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.07), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+    --card-shadow-hover: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+
+    /* Alert Colors */
+    --color-success-bg: #ECFDF5; /* emerald-50 */
+    --color-success-border: #A7F3D0; /* emerald-200 */
+    --color-success-text: #065F46; /* emerald-800 */
+
+    --color-warning-bg: #FFFBEB; /* amber-50 */
+    --color-warning-border: #FDE68A; /* amber-200 */
+    --color-warning-text: #B45309; /* amber-700 */
+
+    --color-danger-bg: #FEF2F2; /* red-50 */
+    --color-danger-border: #FECACA; /* red-200 */
+    --color-danger-text: #B91C1C; /* red-700 */
+
+    --color-info-bg: #EFF6FF; /* blue-50 */
+    --color-info-border: #BFDBFE; /* blue-200 */
+    --color-info-text: #1E40AF; /* blue-800 */
+
+    /* Modal Colors */
+    --modal-bg: var(--color-surface);
+    --modal-surface-secondary: var(--color-surface-secondary);
+    --modal-border: var(--color-border);
+    --modal-text-primary: var(--color-text-primary);
+    --modal-text-secondary: var(--color-text-secondary);
+  }
+
+  [data-theme='dark'] {
+    color-scheme: dark;
+    --color-bg: #111827; /* gray-900 */
+    --color-surface: #1F2937; /* gray-800 */
+    --color-surface-secondary: #374151; /* gray-700 */
+    --color-surface-tertiary: #4B5563; /* gray-600 */
+    --color-border: #374151; /* gray-700 */
+
+    --color-text-primary: #F3F4F6; /* gray-100 */
+    --color-text-secondary: #9CA3AF; /* gray-400 */
+    --color-text-inverted: #111827;
+
+    /* Marketplace Accents - Adjusted for dark mode */
+    --color-ml: #FFC72C;
+    --color-shopee: #EE4D2D;
+    
+    /* Card Styles */
+    --card-bg: var(--color-surface);
+    --card-border: var(--color-border);
+    
+    /* Modal Colors */
+    --modal-bg: var(--color-surface);
+    --modal-surface-secondary: var(--color-surface-secondary);
+    --modal-border: var(--color-border);
+    --modal-text-primary: var(--color-text-primary);
+    --modal-text-secondary: var(--color-text-secondary);
+
+    /* Alert Colors for Dark */
+    --color-success-bg: #052e16;
+    --color-success-border: #065f46;
+    --color-success-text: #6ee7b7;
+
+    --color-warning-bg: #422006;
+    --color-warning-border: #92400e;
+    --color-warning-text: #fcd34d;
+
+    --color-danger-bg: #450a0a;
+    --color-danger-border: #b91c1c;
+    --color-danger-text: #fca5a5;
+
+    --color-info-bg: #1e293b;
+    --color-info-border: #1e40af;
+    --color-info-text: #93c5fd;
+  }
+
+
+  body {
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-dynamic);
+    background-color: var(--color-bg);
+    color: var(--color-text-primary);
+    transition: background-color 0.3s, color 0.3s;
+  }
+
+  /* Smooth Transitions */
+  button, a, input, select, textarea, .transition-all {
+    transition-property: all;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+  
+  /* Marquee Animation for Dashboard */
+  @keyframes marquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .marquee-container {
+    overflow: hidden;
+    position: relative;
+    width: 100%;
+    -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+    mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  }
+
+  .marquee-content {
+    display: flex;
+    white-space: nowrap;
+    animation: marquee 30s linear infinite;
+    will-change: transform;
+  }
+  
+  .marquee-container:hover .marquee-content {
+    animation-play-state: paused;
+  }
+
+
+</style>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./index.tsx"></script>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

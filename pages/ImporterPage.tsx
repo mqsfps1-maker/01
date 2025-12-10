@@ -10,6 +10,7 @@ import CategoryBaseConfigModal from '../components/CategoryBaseConfigModal'; // 
 import DateFilterModal from '../components/DateFilterModal';
 import { ProcessedData, OrderItem, SkuLink, StockItem, ProdutoCombinado, GeneralSettings, User, ImportHistoryItem, Canal, Customer, ToastMessage } from '../types';
 import { parseExcelFile } from '../lib/parser';
+import { getMultiplicadorFromSku, classificarCor } from '../lib/sku';
 import { Loader2, Zap, Trash2, Eye, ArrowLeft, History, XCircle } from 'lucide-react';
 import ConfirmActionModal from '../components/ConfirmActionModal';
 
@@ -37,7 +38,7 @@ interface ImporterPageProps {
     setGeneralSettings: (settings: GeneralSettings | ((prev: GeneralSettings) => GeneralSettings)) => void;
     currentUser: User;
     importHistory: ImportHistoryItem[];
-    addImportToHistory: (item: Omit<ImportHistoryItem, 'id' | 'processedData'>, data: ProcessedData) => void;
+    addImportToHistory: (item: Omit<ImportHistoryItem, 'id' | 'processedData'>, data: ProcessedData) => Promise<any>;
     clearImportHistory: () => void;
     onDeleteImportHistoryItem: (historyItemId: string) => void;
     addToast: (message: string, type: ToastMessage['type']) => void;
@@ -118,6 +119,33 @@ const ImporterPage: React.FC<ImporterPageProps> = (props) => {
             const buffer = await selectedFile.arrayBuffer();
             let data = await parseExcelFile(buffer, selectedFile.name, allOrders, generalSettings);
 
+            // Adjust multiplicador (multiplier) using skuLinks -> stockItems mapping when available
+            const skuLinkMap = new Map<string, string>(skuLinks.map(l => [l.importedSku, l.masterProductSku]));
+            const stockItemMap = new Map<string, StockItem>(stockItems.map(s => [s.code, s]));
+
+            data.lists.completa = data.lists.completa.map(o => {
+                const existingMultiplier = (o as any).multiplicador || (o as any).multiplicador === 0 ? (o as any).multiplicador : undefined;
+                let multiplier = existingMultiplier ?? getMultiplicadorFromSku(o.sku);
+                const masterSku = skuLinkMap.get(o.sku);
+                if (masterSku) {
+                    const masterProduct = stockItemMap.get(masterSku);
+                    if (masterProduct && masterProduct.linkedSkus) {
+                        const link = masterProduct.linkedSkus.find(ls => ls.sku === o.sku);
+                        if (link && link.multiplier) multiplier = link.multiplier;
+                    }
+                }
+                const qty_original = (o as any).qty_original ?? (o as any).quantity ?? 1;
+                const qtyFinal = (qty_original || 1) * (multiplier || 1);
+                return { ...o, multiplicador: multiplier, qty_original: qty_original, qty_final: qtyFinal } as OrderItem;
+            });
+
+            // Recompute summary and skusNaoVinculados after adjustments
+            const displayOrders = data.lists.completa;
+            data.summary.totalPedidos = new Set(displayOrders.map(o => o.orderId)).size;
+            data.summary.totalPacotes = displayOrders.length;
+            data.summary.totalUnidades = displayOrders.reduce((sum, item) => sum + (item.qty_final || 0), 0);
+            data.skusNaoVinculados = Array.from(new Set(displayOrders.map(i => i.sku))).filter(sku => !skuLinkMap.has(sku)).map(sku => ({ sku, colorSugerida: classificarCor(sku) }));
+
             if (data.canal === 'SHOPEE' && data.lists.completa.some(o => o.shippingDate)) {
                  const filteredOrders = await new Promise<OrderItem[]>((resolve) => {
                     const handleConfirm = (start: string, end: string) => {
@@ -143,14 +171,21 @@ const ImporterPage: React.FC<ImporterPageProps> = (props) => {
             }
             
             setProcessedData(data);
-            addImportToHistory({
-                fileName: selectedFile.name,
-                processedAt: new Date().toISOString(),
-                user: currentUser.name,
-                itemCount: data.summary.totalPacotes,
-                unlinkedCount: data.skusNaoVinculados.length,
-                canal: data.canal,
-            }, data);
+            try {
+                // ensure history is persisted and surface any errors
+                await Promise.resolve(addImportToHistory({
+                    fileName: selectedFile.name,
+                    processedAt: new Date().toISOString(),
+                    user: currentUser.name,
+                    itemCount: data.summary.totalPacotes,
+                    unlinkedCount: data.skusNaoVinculados.length,
+                    canal: data.canal,
+                }, data));
+                addToast('Histórico de importação salvo.', 'success');
+            } catch (histErr) {
+                console.error('Falha ao salvar histórico:', histErr);
+                addToast('Falha ao salvar histórico de importação.', 'error');
+            }
 
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Ocorreu um erro desconhecido.');
@@ -214,6 +249,21 @@ const ImporterPage: React.FC<ImporterPageProps> = (props) => {
                 kind: 'PRODUTO'
             }
         });
+    };
+
+    const handleBulkCreateSelected = () => {
+        if (!selectedSkus || selectedSkus.size === 0) return;
+        const skus = Array.from(selectedSkus);
+        setProductFormState({
+            isOpen: true,
+            item: {
+                code: skus[0],
+                name: skus[0].replace(/[-_]/g, ' '),
+                linkedSkus: skus.map(s => ({ sku: s, multiplier: 1 })),
+                kind: 'PRODUTO'
+            }
+        });
+        setSelectedSkus(new Set());
     };
     
     const handleViewHistory = (item: ImportHistoryItem) => {
@@ -334,6 +384,7 @@ const ImporterPage: React.FC<ImporterPageProps> = (props) => {
                         onUnlinkSku={() => {}}
                         onOpenLinkModal={(skus, color) => setLinkModalState({ isOpen: true, skus, color })}
                         onOpenCreateProductModal={handleOpenCreateModal}
+                        onBulkCreateProducts={handleBulkCreateSelected}
                         selectedSkus={selectedSkus}
                         setSelectedSkus={setSelectedSkus}
                         produtosCombinados={produtosCombinados}

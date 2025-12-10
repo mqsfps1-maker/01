@@ -25,6 +25,7 @@ interface ImportResultsProps {
     onUnlinkSku: (importedSku: string) => void;
     onOpenLinkModal: (skus: string[], colorSugerida: string) => void;
     onOpenCreateProductModal: (skuData: { sku: string; colorSugerida: string }) => void;
+    onBulkCreateProducts?: (skus: string[]) => void;
     selectedSkus: Set<string>;
     setSelectedSkus: React.Dispatch<React.SetStateAction<Set<string>>>;
     produtosCombinados: ProdutoCombinado[];
@@ -59,6 +60,7 @@ export const ImportResults: React.FC<ImportResultsProps> = (props) => {
     const [unlinkedSearchTerm, setUnlinkedSearchTerm] = useState('');
     const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'ascending' | 'descending' }>({ key: 'total_units', direction: 'descending' });
     const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+    const [completaFilter, setCompletaFilter] = useState<'all' | 'multiSku' | 'multiUnit'>('all');
     
     // State for assigned responsibles
     const [assignedResponsibles, setAssignedResponsibles] = useState<Record<string, string>>({});
@@ -155,6 +157,8 @@ export const ImportResults: React.FC<ImportResultsProps> = (props) => {
                 totaisPorProduto: newTotaisPorProduto,
                 listaDeMateriais: newListaDeMateriais,
             },
+            // attach grouped orders for UI convenience
+            groupedByOrderId: ordersByOrderId,
         };
     }, [data, linkedSkusMap, stockItemMap, produtosCombinados, skuLinks, stockItems]);
     
@@ -321,11 +325,18 @@ export const ImportResults: React.FC<ImportResultsProps> = (props) => {
                                      <button onClick={() => exportOnlyUnlinked(correctedData, skuLinks)} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700">
                                         <FileDown size={16} /> Exportar Pendentes (Excel)
                                     </button>
-                                     {selectedSkus.size > 0 && (
-                                        <button onClick={handleBulkLink} className="flex items-center gap-2 px-3 py-2 text-sm bg-[var(--color-primary)] text-white rounded-md hover:bg-[var(--color-primary-hover)]">
-                                            <LinkIcon size={16} /> Vincular {selectedSkus.size} Selecionados
-                                        </button>
-                                    )}
+                                    {selectedSkus.size > 0 && (
+                                            <>
+                                                <button onClick={handleBulkLink} className="flex items-center gap-2 px-3 py-2 text-sm bg-[var(--color-primary)] text-white rounded-md hover:bg-[var(--color-primary-hover)]">
+                                                    <LinkIcon size={16} /> Vincular {selectedSkus.size} Selecionados
+                                                </button>
+                                                {props.onBulkCreateProducts && (
+                                                    <button onClick={() => props.onBulkCreateProducts && props.onBulkCreateProducts(Array.from(selectedSkus))} className="flex items-center gap-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700">
+                                                        <PlusCircle size={16} /> Criar Produto(s) Selecionados
+                                                    </button>
+                                                )}
+                                            </>
+                                        )}
                                 </div>
                             </div>
                             
@@ -368,16 +379,26 @@ export const ImportResults: React.FC<ImportResultsProps> = (props) => {
                     {/* --- ABA LISTA COMPLETA (POR PEDIDO) --- */}
                     {activeTab === 'completa' && (
                          <div>
-                            <div className="flex justify-end mb-4 gap-2">
-                                 <button onClick={() => copyToClipboard(correctedData.lists.completa.map(o => `${o.qty_final}x ${o.sku}`).join('\n'))} className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
-                                    <Copy size={16} /> Copiar Lista
-                                </button>
-                                <button onClick={() => exportPdf('completa', correctedData, skuLinks)} className="flex items-center gap-2 px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700">
-                                    <FileDown size={16} /> Exportar PDF
-                                </button>
-                                <button onClick={() => exportExcel(correctedData, skuLinks)} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700">
-                                    <FileDown size={16} /> Exportar Excel
-                                </button>
+                            <div className="flex items-center justify-between mb-4 gap-2">
+                                <div className="flex items-center gap-2">
+                                    <label className="text-sm">Filtro:</label>
+                                    <select value={completaFilter} onChange={e => setCompletaFilter(e.target.value as any)} className="p-1 border rounded">
+                                        <option value="all">Todos os pedidos</option>
+                                        <option value="multiSku">Apenas pedidos com múltiplos SKUs</option>
+                                        <option value="multiUnit">Apenas pedidos com quantidade &gt; 1</option>
+                                    </select>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => copyToClipboard(correctedData.lists.completa.map(o => `${o.qty_final}x ${o.sku}`).join('\n'))} className="flex items-center gap-2 px-3 py-2 text-sm bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+                                        <Copy size={16} /> Copiar Lista
+                                    </button>
+                                    <button onClick={() => exportPdf('completa', correctedData, skuLinks)} className="flex items-center gap-2 px-3 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700">
+                                        <FileDown size={16} /> Exportar PDF
+                                    </button>
+                                    <button onClick={() => exportExcel(correctedData, skuLinks)} className="flex items-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700">
+                                        <FileDown size={16} /> Exportar Excel
+                                    </button>
+                                </div>
                             </div>
                             <div className="overflow-x-auto border rounded-lg">
                                 <table className="min-w-full text-sm">
@@ -385,29 +406,38 @@ export const ImportResults: React.FC<ImportResultsProps> = (props) => {
                                         <tr>
                                             <th className="p-3 text-left">Pedido</th>
                                             <th className="p-3 text-left">Rastreio</th>
-                                            <th className="p-3 text-left">SKU</th>
-                                            <th className="p-3 text-center">Qtd</th>
-                                            <th className="p-3 text-left">Cor</th>
-                                            <th className="p-3 text-center">Status</th>
+                                            <th className="p-3 text-left">Itens</th>
+                                            <th className="p-3 text-center">Total Unidades</th>
+                                            <th className="p-3 text-left">Status</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-[var(--color-border)]">
-                                        {correctedData.lists.completa.map((order, idx) => {
-                                            const isLinked = linkedSkusMap.has(order.sku);
+                                        {Array.from((correctedData as any).groupedByOrderId as Map<string, OrderItem[]>).map(([orderId, items]) => {
+                                            // apply filter
+                                            if (completaFilter === 'multiSku' && items.length <= 1) return null;
+                                            if (completaFilter === 'multiUnit' && !items.some(it => it.qty_final > 1)) return null;
+
+                                            const totalUnits = items.reduce((s, it) => s + it.qty_final, 0);
+                                            const allLinked = items.every(it => linkedSkusMap.has(it.sku));
                                             return (
-                                                <tr key={idx} className="hover:bg-[var(--color-surface-secondary)]">
-                                                    <td className="p-3 font-mono text-xs">{order.orderId}</td>
-                                                    <td className="p-3 font-mono text-xs">{order.tracking}</td>
-                                                    <td className="p-3">{order.sku}</td>
-                                                    <td className="p-3 text-center font-bold">{order.qty_final}</td>
-                                                    <td className="p-3">{order.color}</td>
-                                                    <td className="p-3 text-center">
-                                                        {isLinked ? 
-                                                            <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">Vinculado</span> : 
-                                                            <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">Pendente</span>
-                                                        }
-                                                    </td>
-                                                </tr>
+                                                <React.Fragment key={orderId}>
+                                                    <tr className="hover:bg-[var(--color-surface-secondary)]">
+                                                        <td className="p-3 font-mono text-xs align-top">{orderId}</td>
+                                                        <td className="p-3 font-mono text-xs align-top">{items.map(i => i.tracking).filter(Boolean).join('<br/>')}</td>
+                                                        <td className="p-3 text-sm">
+                                                            <div className="space-y-1">
+                                                                {items.map((it, idx) => (
+                                                                    <div key={idx} className="flex items-center justify-between">
+                                                                        <div className="font-mono text-xs">{it.sku}</div>
+                                                                        <div className="text-xs">{it.qty_final}x</div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </td>
+                                                        <td className="p-3 text-center font-bold">{totalUnits}</td>
+                                                        <td className="p-3 text-center">{allLinked ? <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full">Vinculado</span> : <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">Pendente</span>}</td>
+                                                    </tr>
+                                                </React.Fragment>
                                             );
                                         })}
                                     </tbody>

@@ -34,6 +34,7 @@ import ProfilePage from './pages/ProfilePage';
 import AdminMetricsPage from './pages/AdminMetricsPage';
 import BiDashboardPage from './pages/BiDashboardPage';
 import MoagemPage from './pages/MoagemPage';
+import EstoquePage from './pages/EstoquePage';
 
 // Mock for UpgradePromptModal if not available
 const UpgradePromptModal = ({ isOpen, onClose, onUpgradeClick, onSnooze, type, daysLeft }: any) => {
@@ -72,6 +73,7 @@ interface AppCoreProps {
 const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     const [isLoading, setIsLoading] = useState(true);
     const [subscription, setSubscription] = useState<Subscription | null>(null);
+    const [remainingLabels, setRemainingLabels] = useState<number | null>(null);
     const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
     const [upgradeModalType, setUpgradeModalType] = useState<'trial' | 'expiring'>('trial');
     const [daysLeft, setDaysLeft] = useState(0);
@@ -145,6 +147,17 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 const activeSubscription = subData || defaultSubscription;
                 setSubscription(activeSubscription);
 
+                // compute remaining labels (plan limit + bonus - used)
+                try {
+                    const planLimit = Number(activeSubscription?.plan?.label_limit || 0);
+                    const bonus = Number(activeSubscription?.bonus_balance || 0);
+                    const used = Number(activeSubscription?.monthly_label_count || 0);
+                    const remaining = planLimit + bonus - used;
+                    setRemainingLabels(isNaN(remaining) ? null : remaining);
+                } catch (err) {
+                    setRemainingLabels(null);
+                }
+
                 const snoozeSetting = appSettings.find(s => s.key === 'subscription_snooze');
                 const snoozeUntil = snoozeSetting?.value?.until || 0;
                 const now = new Date().getTime();
@@ -152,15 +165,37 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 if (now > snoozeUntil) {
                     const periodEnd = new Date(activeSubscription.period_end);
                     const diffTime = periodEnd.getTime() - now;
-                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    setDaysLeft(diffDays);
+                    let diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                    // never show negative days to the user
+                    if (isNaN(diffDays)) diffDays = 0;
+                    setDaysLeft(Math.max(0, diffDays));
 
-                    if ((!subData || activeSubscription.status === 'trialing')) {
+                    // Check trial expiration
+                    if ((!subData || activeSubscription.status === 'trialing') && now > periodEnd.getTime()) {
+                        // Trial ended -> inform user (they can continue but we'll show a popup)
                         setUpgradeModalType('trial');
                         setTimeout(() => setIsUpgradeModalOpen(true), 2000);
-                    } else if (diffDays <= 3 && diffDays >= -5) {
+                    } else if (diffDays <= 3 && diffDays >= 0) {
+                        // show expiring only if within the next 3 days
                         setUpgradeModalType('expiring');
                         setTimeout(() => setIsUpgradeModalOpen(true), 2000);
+                    }
+
+                    // Check label quota exhaustion for free plans / limits
+                    try {
+                        const planLimit = Number(activeSubscription?.plan?.label_limit || 0);
+                        const bonus = Number(activeSubscription?.bonus_balance || 0);
+                        const used = Number(activeSubscription?.monthly_label_count || 0);
+                        const remainingLabels = planLimit + bonus - used;
+
+                        if (planLimit > 0 && remainingLabels <= 0) {
+                            // Show informational modal telling user the free-label quota is exhausted.
+                            setUpgradeModalType('expiring');
+                            setTimeout(() => setIsUpgradeModalOpen(true), 2000);
+                        }
+                    } catch (err) {
+                        // swallow any error calculating labels
+                        console.warn('Could not compute remaining labels', err);
                     }
                 }
 
@@ -293,15 +328,33 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         if (!user?.organization_id) return;
         const newSettings = value instanceof Function ? value(generalSettings) : value;
         _setGeneralSettings(newSettings);
-        await dbClient.from('app_settings').upsert({ key: 'general_settings', value: newSettings, organization_id: user.organization_id });
-    }, [generalSettings, user]);
+        try {
+            const { error } = await dbClient.from('app_settings').upsert({ key: 'general_settings', value: newSettings, organization_id: user.organization_id });
+            if (error) {
+                console.error('Failed to save general_settings:', error);
+                addToast('Erro ao salvar configurações gerais.', 'error');
+            }
+        } catch (err) {
+            console.error('setGeneralSettings error:', err);
+            addToast('Erro ao salvar configurações gerais.', 'error');
+        }
+    }, [generalSettings, user, addToast]);
 
     const setPlanningSettings = useCallback(async (value: PlanningParameters | ((prev: PlanningParameters) => PlanningParameters)) => {
         if (!user?.organization_id) return;
         const newSettings = value instanceof Function ? value(planningSettings) : value;
         _setPlanningSettings(newSettings);
-        await dbClient.from('app_settings').upsert({ key: 'planning_settings', value: newSettings, organization_id: user.organization_id });
-    }, [planningSettings, user]);
+        try {
+            const { error } = await dbClient.from('app_settings').upsert({ key: 'planning_settings', value: newSettings, organization_id: user.organization_id });
+            if (error) {
+                console.error('Failed to save planning_settings:', error);
+                addToast('Erro ao salvar configurações de planejamento.', 'error');
+            }
+        } catch (err) {
+            console.error('setPlanningSettings error:', err);
+            addToast('Erro ao salvar configurações de planejamento.', 'error');
+        }
+    }, [planningSettings, user, addToast]);
 
     const handleUpdateUser = async (updatedUser: User): Promise<boolean> => {
         const safePayload: Partial<User> = {
@@ -323,9 +376,16 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     const handleDeleteUser = async (userId: string): Promise<boolean> => {
         try {
             const { error } = await dbClient.functions.invoke('delete-user', { body: { userId } });
-            if (error) throw error;
+            if (error) {
+                console.error('Failed to delete user:', error);
+                addToast('Erro ao deletar usuário.', 'error');
+                return false;
+            }
+            addToast('Usuário deletado com sucesso!', 'success');
             return true;
         } catch (err: any) {
+            console.error('handleDeleteUser error:', err);
+            addToast('Erro ao deletar usuário.', 'error');
             return false;
         }
     };
@@ -334,30 +394,86 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         if (!user?.organization_id) return null;
         const isNew = !itemData.id;
         const payload = { ...itemData, id: isNew ? undefined : itemData.id, organization_id: user.organization_id };
-        const { data, error } = await dbClient.from('stock_items').upsert(payload).select().single();
-        if (error) return null;
-        return data;
+        try {
+            const { data, error } = await dbClient.from('stock_items').upsert(payload).select().single();
+            if (error) {
+                console.error('Failed to save stock_item:', error);
+                addToast(`Erro ao salvar produto "${itemData.name}": ${error.message || ''}`, 'error');
+                return null;
+            }
+            addToast(`Produto "${itemData.name}" salvo com sucesso!`, 'success');
+            return data;
+        } catch (err) {
+            console.error('onSaveStockItem error:', err);
+            addToast('Erro inesperado ao salvar produto.', 'error');
+            return null;
+        }
     };
   
     const handleSaveProdutoCombinado = async (productSku: string, newBomItems: ProdutoCombinado['items']) => {
       if (!user?.organization_id) return;
-      await dbClient.from('product_boms').upsert({ product_sku: productSku, items: newBomItems, organization_id: user.organization_id });
+      try {
+          const { error } = await dbClient.from('product_boms').upsert({ product_sku: productSku, items: newBomItems, organization_id: user.organization_id });
+          if (error) {
+              console.error('Failed to save product_boms:', error);
+              addToast('Erro ao salvar configuração de produto combinado.', 'error');
+          }
+      } catch (err) {
+          console.error('handleSaveProdutoCombinado error:', err);
+          addToast('Erro ao salvar configuração de produto combinado.', 'error');
+      }
     };
 
     const handleLinkSku = async (importedSku: string, masterProductSku: string): Promise<boolean> => {
         if (!user?.organization_id) return false;
-        const { error } = await dbClient.from('sku_links').upsert({ imported_sku: importedSku, master_product_sku: masterProductSku, organization_id: user.organization_id });
-        return !error;
+        try {
+            const { error } = await dbClient.from('sku_links').upsert({ imported_sku: importedSku, master_product_sku: masterProductSku, organization_id: user.organization_id });
+            if (error) {
+                console.error('Failed to link SKU:', error);
+                addToast(`Erro ao vincular SKU: ${error.message || ''}`, 'error');
+                return false;
+            }
+            addToast(`SKU "${importedSku}" vinculado com sucesso!`, 'success');
+            return true;
+        } catch (err) {
+            console.error('handleLinkSku error:', err);
+            addToast('Erro ao vincular SKU.', 'error');
+            return false;
+        }
     };
 
     const handleUnlinkSku = async (importedSku: string): Promise<boolean> => {
-        const { error } = await dbClient.from('sku_links').delete().eq('imported_sku', importedSku);
-        return !error;
+        try {
+            const { error } = await dbClient.from('sku_links').delete().eq('imported_sku', importedSku);
+            if (error) {
+                console.error('Failed to unlink SKU:', error);
+                addToast(`Erro ao desvinc ular SKU: ${error.message || ''}`, 'error');
+                return false;
+            }
+            addToast(`SKU "${importedSku}" desvinculado com sucesso!`, 'success');
+            return true;
+        } catch (err) {
+            console.error('handleUnlinkSku error:', err);
+            addToast('Erro ao desvincular SKU.', 'error');
+            return false;
+        }
     };
 
     const handleDeleteStockItem = async (itemId: string): Promise<boolean> => {
-        const { error } = await dbClient.from('stock_items').delete().eq('id', itemId);
-        return !error;
+        try {
+            const { error } = await dbClient.from('stock_items').delete().eq('id', itemId);
+            if (error) {
+                console.error('Failed to delete stock_item:', error);
+                addToast('Erro ao deletar produto.', 'error');
+                return false;
+            }
+            addToast('Produto deletado com sucesso!', 'success');
+            return true;
+        } catch (err) {
+            console.error('handleDeleteStockItem error:', err);
+            addToast('Erro ao deletar produto.', 'error');
+            return false;
+        }
     };
 
     const handleLaunch = async (data: { ordersToCreate: OrderItem[], ordersToUpdate: OrderItem[] }) => {
@@ -374,43 +490,179 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
   
     const handleSaveProductionPlan = async (plan: Omit<ProductionPlan, 'id' | 'createdAt' | 'createdBy'>): Promise<ProductionPlan | null> => {
         if (!user?.organization_id) return null;
-        const { data, error } = await dbClient.from('production_plans').insert({ ...plan, created_by: user?.name, organization_id: user.organization_id }).select().single();
-        if(error) return null;
-        return data;
+        try {
+            const { data, error } = await dbClient.from('production_plans').insert({ ...plan, created_by: user?.name, organization_id: user.organization_id }).select().single();
+            if (error) {
+                console.error('Failed to save production plan:', error);
+                addToast('Erro ao salvar plano de produção.', 'error');
+                return null;
+            }
+            addToast('Plano de produção salvo com sucesso!', 'success');
+            return data;
+        } catch (err) {
+            console.error('handleSaveProductionPlan error:', err);
+            addToast('Erro ao salvar plano de produção.', 'error');
+            return null;
+        }
     };
 
     const handleDeleteProductionPlan = async (planId: string): Promise<boolean> => {
-        const { error } = await dbClient.from('production_plans').delete().eq('id', planId);
-        return !error;
+        try {
+            const { error } = await dbClient.from('production_plans').delete().eq('id', planId);
+            if (error) {
+                console.error('Failed to delete production plan:', error);
+                addToast('Erro ao deletar plano de produção.', 'error');
+                return false;
+            }
+            addToast('Plano de produção deletado com sucesso!', 'success');
+            return true;
+        } catch (err) {
+            console.error('handleDeleteProductionPlan error:', err);
+            addToast('Erro ao deletar plano de produção.', 'error');
+            return false;
+        }
     };
 
     const handleGenerateShoppingList = async (list: ShoppingListItem[]) => {
         if (!user?.organization_id) return;
-        await dbClient.from('shopping_list_items').delete().neq('stock_item_code', 'dummy');
-        const payload = list.map(item => ({ stock_item_code: item.id, name: item.name, quantity: item.quantity, unit: item.unit, organization_id: user.organization_id }));
-        await dbClient.from('shopping_list_items').insert(payload);
+        try {
+            const { error: deleteError } = await dbClient.from('shopping_list_items').delete().neq('stock_item_code', 'dummy');
+            if (deleteError) {
+                console.error('Failed to clear shopping list:', deleteError);
+                addToast('Erro ao limpar lista de compras anterior.', 'error');
+                return;
+            }
+            
+            const payload = list.map(item => ({ stock_item_code: item.id, name: item.name, quantity: item.quantity, unit: item.unit, organization_id: user.organization_id }));
+            const { error: insertError } = await dbClient.from('shopping_list_items').insert(payload);
+            
+            if (insertError) {
+                console.error('Failed to generate shopping list:', insertError);
+                addToast('Erro ao gerar lista de compras.', 'error');
+                return;
+            }
+            
+            addToast(`Lista de compras gerada com ${list.length} item(ns)!`, 'success');
+        } catch (err) {
+            console.error('handleGenerateShoppingList error:', err);
+            addToast('Erro ao gerar lista de compras.', 'error');
+        }
     };
 
     const handleUpdateShoppingListItem = async (itemCode: string, isPurchased: boolean) => {
-        await dbClient.from('shopping_list_items').update({ is_purchased: isPurchased }).eq('stock_item_code', itemCode);
+        try {
+            const { error } = await dbClient.from('shopping_list_items').update({ is_purchased: isPurchased }).eq('stock_item_code', itemCode);
+            if (error) {
+                console.error('Failed to update shopping list item:', error);
+                addToast('Erro ao atualizar item da lista de compras.', 'error');
+                return;
+            }
+            addToast(isPurchased ? 'Marcado como comprado!' : 'Marcado como não comprado!', 'success');
+        } catch (err) {
+            console.error('handleUpdateShoppingListItem error:', err);
+            addToast('Erro ao atualizar item da lista de compras.', 'error');
+        }
     };
 
     const handleClearShoppingList = async () => {
-        await dbClient.from('shopping_list_items').delete().neq('stock_item_code', 'dummy');
+        try {
+            const { error } = await dbClient.from('shopping_list_items').delete().neq('stock_item_code', 'dummy');
+            if (error) {
+                console.error('Failed to clear shopping list:', error);
+                addToast('Erro ao limpar lista de compras.', 'error');
+                return;
+            }
+            addToast('Lista de compras limpa com sucesso!', 'success');
+        } catch (err) {
+            console.error('handleClearShoppingList error:', err);
+            addToast('Erro ao limpar lista de compras.', 'error');
+        }
     };
 
     const handleAddImportToHistory = async (item: Omit<ImportHistoryItem, 'id' | 'processedData'>, data: ProcessedData) => {
         if (!user?.organization_id) return;
-        const payload = { ...item, processed_data: data, organization_id: user.organization_id };
-        await dbClient.from('import_history').insert(payload);
+        // Map JS/camelCase fields to DB snake_case column names
+        const payload: any = {
+            file_name: (item as any).fileName || (item as any).file_name || null,
+            processed_at: (item as any).processedAt || (item as any).processed_at || new Date().toISOString(),
+            user_name: (item as any).user || (item as any).user_name || user.name,
+            item_count: (item as any).itemCount ?? (item as any).item_count ?? null,
+            unlinked_count: (item as any).unlinkedCount ?? (item as any).unlinked_count ?? 0,
+            canal: (item as any).canal || null,
+            processed_data: data,
+            organization_id: user.organization_id
+        };
+
+        try {
+            const { data: resData, error } = await dbClient.from('import_history').insert(payload).select().single();
+            if (error) {
+                console.error('Failed to insert import_history:', JSON.stringify(error, null, 2));
+                throw new Error(error.message || 'Erro ao salvar histórico de importação');
+            }
+            // update local state so UI shows the newly saved item
+            setImportHistory(prev => resData ? [resData, ...prev] : prev);
+            return resData;
+        } catch (err: any) {
+            console.error('handleAddImportToHistory error:', err);
+            throw err;
+        }
+    };
+
+    const handleSaveEtiquetaHistory = async (item: Omit<EtiquetaHistoryItem, 'id' | 'created_at'>) => {
+        if (!user?.organization_id) return null;
+        try {
+            const { data: histId, error } = await dbClient.rpc('save_etiqueta_history', {
+                p_created_by_name: (item as any).created_by_name || user.name,
+                p_page_count: (item as any).page_count || 0,
+                p_zpl_content: (item as any).zpl_content || '',
+                p_settings_snapshot: (item as any).settings_snapshot || {},
+                p_page_hashes: (item as any).page_hashes || []
+            });
+            if (error) {
+                console.error('Failed to save etiqueta history:', error);
+                throw new Error(error.message || 'Erro ao salvar histórico de etiquetas');
+            }
+            // fetch updated history from server
+            const { data: updated } = await dbClient.from('etiquetas_historico').select('*').eq('id', histId).single();
+            if (updated) {
+                setEtiquetasHistory(prev => [updated, ...prev]);
+            }
+            return updated;
+        } catch (err: any) {
+            console.error('handleSaveEtiquetaHistory error:', err);
+            throw err;
+        }
     };
   
     const handleDeleteImportHistoryItem = async (historyItemId: string) => {
-        const itemToDelete = importHistory.find(item => item.id === historyItemId);
-        if (!itemToDelete) return;
-        const orderIds = new Set(itemToDelete.processedData.lists.completa.map(o => o.orderId));
-        await dbClient.from('orders').delete().in('order_id', Array.from(orderIds));
-        await dbClient.from('import_history').delete().eq('id', historyItemId);
+        try {
+            const itemToDelete = importHistory.find(item => item.id === historyItemId);
+            if (!itemToDelete) {
+                addToast('Item de histórico não encontrado.', 'error');
+                return;
+            }
+            
+            const orderIds = new Set(itemToDelete.processedData.lists.completa.map(o => o.orderId));
+            
+            const { error: ordersError } = await dbClient.from('orders').delete().in('order_id', Array.from(orderIds));
+            if (ordersError) {
+                console.error('Failed to delete related orders:', ordersError);
+                addToast('Erro ao deletar pedidos relacionados.', 'error');
+                return;
+            }
+            
+            const { error: historyError } = await dbClient.from('import_history').delete().eq('id', historyItemId);
+            if (historyError) {
+                console.error('Failed to delete import history item:', historyError);
+                addToast('Erro ao deletar item de histórico.', 'error');
+                return;
+            }
+            
+            addToast('Histórico de importação deletado com sucesso!', 'success');
+        } catch (err) {
+            console.error('handleDeleteImportHistoryItem error:', err);
+            addToast('Erro ao deletar histórico de importação.', 'error');
+        }
     };
 
     const handleNewScan = async (code: string): Promise<ScanResult> => {
@@ -418,21 +670,123 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     };
     
     const handleDeleteOrders = async (orderIds: string[]) => {
-      const { error } = await dbClient.from('orders').delete().in('order_id', orderIds);
-      if(!error) addToast(`${orderIds.length} pedido(s) excluído(s).`, 'success');
+        try {
+            const { error } = await dbClient.from('orders').delete().in('order_id', orderIds);
+            if (error) {
+                console.error('Failed to delete orders:', error);
+                addToast('Erro ao deletar pedidos.', 'error');
+                return;
+            }
+            addToast(`${orderIds.length} pedido(s) excluído(s) com sucesso!`, 'success');
+        } catch (err) {
+            console.error('handleDeleteOrders error:', err);
+            addToast('Erro ao deletar pedidos.', 'error');
+        }
     };
 
     const handleHardDeleteScanLog = async (scanId: string): Promise<void> => {
-        await dbClient.from('scan_logs').delete().eq('id', scanId);
+        try {
+            const { error } = await dbClient.from('scan_logs').delete().eq('id', scanId);
+            if (error) {
+                console.error('Failed to delete scan log:', error);
+                addToast('Erro ao deletar registro de leitura.', 'error');
+                return;
+            }
+            addToast('Registro de leitura deletado com sucesso!', 'success');
+        } catch (err) {
+            console.error('handleHardDeleteScanLog error:', err);
+            addToast('Erro ao deletar registro de leitura.', 'error');
+        }
     };
 
     const onBulkHardDeleteScanLog = async (scanIds: string[]): Promise<void> => {
-        await dbClient.from('scan_logs').delete().in('id', scanIds);
+        try {
+            const { error } = await dbClient.from('scan_logs').delete().in('id', scanIds);
+            if (error) {
+                console.error('Failed to bulk delete scan logs:', error);
+                addToast('Erro ao deletar registros de leitura.', 'error');
+                return;
+            }
+            addToast(`${scanIds.length} registro(s) de leitura deletado(s) com sucesso!`, 'success');
+        } catch (err) {
+            console.error('onBulkHardDeleteScanLog error:', err);
+            addToast('Erro ao deletar registros de leitura.', 'error');
+        }
     };
   
     const handleBulkUpdateStockItems = async (updates: { id: string, min_qty: number }[]) => {
         if (!user?.organization_id) return;
-        await dbClient.from('stock_items').upsert(updates.map(u => ({...u, organization_id: user.organization_id})));
+        try {
+            const { error } = await dbClient.from('stock_items').upsert(updates.map(u => ({...u, organization_id: user.organization_id})));
+            if (error) {
+                console.error('Failed to bulk update stock_items:', error);
+                addToast('Erro ao atualizar quantidades de produtos.', 'error');
+            } else {
+                addToast(`${updates.length} produto(s) atualizado(s) com sucesso!`, 'success');
+            }
+        } catch (err) {
+            console.error('handleBulkUpdateStockItems error:', err);
+            addToast('Erro ao atualizar quantidades de produtos.', 'error');
+        }
+    };
+
+    const handleBulkInventoryUpdate = async (updates: { code: string, quantity: number }[]): Promise<string> => {
+        if (!user?.organization_id) return 'Erro: Usuário não autenticado';
+        
+        try {
+            // 1. Build updates for stock_items upsert
+            const stockItemUpdates = updates.map(u => {
+                const existingItem = stockItems.find(si => si.code === u.code);
+                return {
+                    code: u.code,
+                    quantity: u.quantity,
+                    organization_id: user.organization_id,
+                    ...(existingItem && { id: existingItem.id })
+                };
+            });
+
+            // 2. Upsert stock items
+            const { error: upsertError } = await dbClient.from('stock_items').upsert(stockItemUpdates, { onConflict: 'code' });
+            
+            if (upsertError) {
+                console.error('Failed to upsert stock_items:', upsertError);
+                addToast('Erro ao atualizar estoque no banco de dados.', 'error');
+                return `Erro ao salvar: ${upsertError.message}`;
+            }
+
+            // 3. Build movements array for RPC log
+            const movements = updates.map(u => ({
+                stock_item_id: stockItems.find(si => si.code === u.code)?.id || '',
+                quantity_changed: u.quantity,
+                movement_type: 'ajuste_planilha',
+                notes: `Ajuste de estoque via importação de planilha`
+            }));
+
+            // 4. Log movements via RPC
+            const { data: logResult, error: logError } = await dbClient.rpc('log_stock_movements_batch', {
+                p_movements: movements
+            });
+
+            if (logError) {
+                console.error('Failed to log stock movements:', logError);
+                // Don't fail the operation if logging fails, just warn
+                addToast(`${updates.length} produto(s) atualizado(s), mas houve erro ao registrar histórico.`, 'error');
+                return `Atualizado com aviso: ${logError.message}`;
+            }
+
+            addToast(`${updates.length} produto(s) atualizado(s) com sucesso!`, 'success');
+            
+            // Refresh stock items to reflect changes
+            await fetchAllData();
+            
+            return `Sucesso: ${updates.length} itens atualizados`;
+
+        } catch (err) {
+            console.error('handleBulkInventoryUpdate error:', err);
+            const errorMsg = err instanceof Error ? err.message : 'Erro desconhecido';
+            addToast(`Erro ao atualizar estoque: ${errorMsg}`, 'error');
+            return `Erro: ${errorMsg}`;
+        }
     };
   
     const handleLogout = async () => {
@@ -507,10 +861,11 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                     <Routes>
                         <Route path="dashboard" element={<DashboardPage allOrders={allOrders} scanHistory={scanHistory} stockItems={stockItems} generalSettings={generalSettings} importHistory={importHistory} onBulkUpdateStockItems={handleBulkUpdateStockItems} subscription={subscription} onRefresh={refreshData} />} />
                         <Route path="importer" element={<ImporterPage allOrders={allOrders} selectedFile={selectedFile} setSelectedFile={setSelectedFile} processedData={processedData} setProcessedData={setProcessedData} error={importerError} setError={setImporterError} isProcessing={isProcessing} setIsProcessing={setIsProcessing} onLaunch={handleLaunch} skuLinks={skuLinks} onLinkSku={handleLinkSku} onUnlinkSku={handleUnlinkSku} products={stockItems} onSaveStockItem={onSaveStockItem as any} onSaveProdutoCombinado={handleSaveProdutoCombinado} produtosCombinados={produtosCombinados} stockItems={stockItems} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} currentUser={user!} importHistory={importHistory} addImportToHistory={handleAddImportToHistory} clearImportHistory={() => setImportHistory([])} onDeleteImportHistoryItem={handleDeleteImportHistoryItem} addToast={addToast} customers={customers} unlinkedSkus={[]} />} />
-                        <Route path="etiquetas" element={<EtiquetasPage settings={etiquetasSettings} onSettingsSave={setEtiquetasSettings} stockItems={stockItems} etiquetasState={etiquetasState} setEtiquetasState={setEtiquetasState} currentUser={user!} allOrders={allOrders} setAllOrders={setAllOrders} etiquetasHistory={etiquetasHistory} onSaveHistory={(item) => setEtiquetasHistory(prev => [{...item, id: `hist_${Date.now()}`, created_at: new Date().toISOString()}, ...prev])} onSaveStockItem={onSaveStockItem as any} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} skuLinks={skuLinks} scanHistory={scanHistory} labelProcessingStatus={labelProcessingStatus} setLabelProcessingStatus={setLabelProcessingStatus} addToast={addToast} />} />
+                        <Route path="etiquetas" element={<EtiquetasPage settings={etiquetasSettings} onSettingsSave={setEtiquetasSettings} stockItems={stockItems} etiquetasState={etiquetasState} setEtiquetasState={setEtiquetasState} currentUser={user!} allOrders={allOrders} setAllOrders={setAllOrders} etiquetasHistory={etiquetasHistory} onSaveHistory={(item) => setEtiquetasHistory(prev => [{...item, id: `hist_${Date.now()}`, created_at: new Date().toISOString()}, ...prev])} onSaveStockItem={onSaveStockItem as any} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} skuLinks={skuLinks} scanHistory={scanHistory} labelProcessingStatus={labelProcessingStatus} setLabelProcessingStatus={setLabelProcessingStatus} addToast={addToast} onLabelsUsed={refreshData} remainingLabels={remainingLabels} />} />
                         <Route path="pedidos" element={<PedidosPage allOrders={allOrders} scanHistory={scanHistory} setAllOrders={setAllOrders} setScanHistory={setScanHistory} currentUser={user!} generalSettings={generalSettings} addToast={addToast} onDeleteOrders={handleDeleteOrders} />} />
                         <Route path="bipagem" element={<BipagemPage allOrders={allOrders} onNewScan={handleNewScan} onBomDeduction={()=>{}} scanHistory={scanHistory} onCancelBipagem={()=>{}} onBulkCancelBipagem={async () => {}} onHardDeleteScanLog={handleHardDeleteScanLog} onBulkHardDeleteScanLog={onBulkHardDeleteScanLog} products={stockItems} users={users} onAddNewUser={handleAddNewUser} onSaveUser={handleUpdateUser} uiSettings={user?.ui_settings || defaultUiSettings} currentUser={user!} onSyncPending={async () => {}} skuLinks={skuLinks} addToast={addToast} currentPage={location.pathname.split('/')[2] || 'bipagem'} isAutoBipagemActive={isAutoBipagemActive} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} />} />
                         <Route path="produtos" element={<ProductPage stockItems={stockItems} produtosCombinados={produtosCombinados} onSaveProdutoCombinado={handleSaveProdutoCombinado} unlinkedSkus={[]} setUnlinkedSkus={() => {}} onSaveStockItem={onSaveStockItem as any} onDeleteStockItem={handleDeleteStockItem} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} />} />
+                        <Route path="estoque" element={<EstoquePage stockItems={stockItems} produtosCombinados={produtosCombinados} onSaveStockItem={onSaveStockItem as any} onDeleteStockItem={handleDeleteStockItem} onBulkDeleteItems={async () => {}} onDeleteItem={handleDeleteStockItem} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} onSaveExpeditionItems={async () => {}} onConfirmImportFromXml={handleLaunch} onUpdateInsumoCategory={async () => {}} onBulkInventoryUpdate={handleBulkInventoryUpdate} users={users} skuLinks={skuLinks} onLinkSku={handleLinkSku} onUnlinkSku={handleUnlinkSku} unlinkedSkus={[]} onSaveProdutoCombinado={handleSaveProdutoCombinado} />} />
                         <Route path="clientes" element={<ClientesPage customers={customers} setCustomers={setCustomers} allOrders={allOrders} />} />
                         <Route path="ajuda" element={<AjudaPage />} />
                         <Route path="planejamento" element={<PlanejamentoPage stockItems={stockItems} allOrders={allOrders} skuLinks={skuLinks} produtosCombinados={produtosCombinados} productionPlans={productionPlans} onSaveProductionPlan={handleSaveProductionPlan} onDeleteProductionPlan={handleDeleteProductionPlan} onGenerateShoppingList={handleGenerateShoppingList} currentUser={user!} planningSettings={planningSettings} onSavePlanningSettings={setPlanningSettings} addToast={addToast} />} />

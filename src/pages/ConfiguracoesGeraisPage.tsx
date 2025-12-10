@@ -301,7 +301,9 @@ const ConfiguracoesGeraisPage: React.FC<ConfiguracoesGeraisPageProps> = (props) 
         const [stockItemCode, setStockItemCode] = useState('');
         const [quantity, setQuantity] = useState(1);
         const [labelOverride, setLabelOverride] = useState('');
-        const [productType, setProductType] = useState<string | undefined>(Object.keys(settings.productTypeNames || {})[0]);
+        // derive categories from stockItems (use product's registered category)
+        const derivedCategories = Array.from(new Set(props.stockItems.map(i => (i.category || 'Sem Categoria')))).sort();
+        const [productType, setProductType] = useState<string | undefined>(derivedCategories[0]);
         const insumos = props.stockItems.filter(i => i.kind === 'INSUMO');
         const [isEditOpen, setIsEditOpen] = useState(false);
         const [editingRule, setEditingRule] = useState<ExpeditionRule | null>(null);
@@ -333,8 +335,8 @@ const ConfiguracoesGeraisPage: React.FC<ConfiguracoesGeraisPageProps> = (props) 
                         <label className="text-xs">Tipo de Produto</label>
                         <select value={productType} onChange={e => setProductType(e.target.value)} className="w-full p-1 border rounded-md bg-white">
                             <option value="">(Todos)</option>
-                            {Object.entries(settings.productTypeNames || {}).map(([key, label]) => (
-                                <option key={key} value={key}>{label}</option>
+                            {derivedCategories.map(cat => (
+                                <option key={cat} value={cat}>{cat}</option>
                             ))}
                         </select>
                     </div>
@@ -361,7 +363,7 @@ const ConfiguracoesGeraisPage: React.FC<ConfiguracoesGeraisPageProps> = (props) 
                             <span>
                                 Se de <strong>{rule.from}</strong> a <strong>{rule.to}</strong>, abater <strong>{rule.quantity}x</strong> de {stockItems.find(i => i.code === rule.stockItemCode)?.name || rule.stockItemCode}
                                 {rule.labelOverride ? <span className="text-[var(--color-text-secondary)]"> ({rule.labelOverride})</span> : null}
-                                {rule.productType ? <span className="text-[var(--color-text-secondary)]"> — Tipo: <strong>{settings.productTypeNames?.[rule.productType] || rule.productType}</strong></span> : null}
+                                {rule.productType ? <span className="text-[var(--color-text-secondary)]"> — Tipo: <strong>{rule.productType}</strong></span> : null}
                             </span>
                             <div className="flex items-center gap-2">
                                 <button onClick={() => { setEditingRule(rule); setIsEditOpen(true); }} className="p-1 text-blue-600 hover:bg-blue-50 rounded-full"><Edit size={12}/></button>
@@ -383,8 +385,8 @@ const ConfiguracoesGeraisPage: React.FC<ConfiguracoesGeraisPageProps> = (props) 
                                     <label className="text-sm">Tipo de Produto</label>
                                     <select className="w-full p-2 border rounded mt-1" value={editingRule.productType || ''} onChange={e => setEditingRule(r => r ? {...r, productType: e.target.value || undefined} : r)}>
                                         <option value="">(Todos)</option>
-                                        {Object.entries(settings.productTypeNames || {}).map(([key, label]) => (
-                                            <option key={key} value={key}>{label}</option>
+                                        {derivedCategories.map(cat => (
+                                            <option key={cat} value={cat}>{cat}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -646,8 +648,8 @@ const ConfiguracoesGeraisPage: React.FC<ConfiguracoesGeraisPageProps> = (props) 
                                     onUpdate={handleUpdateRule}
                                 />
                                  <ExpeditionRuleEditor
-                                    title="Regras de Embalagem"
-                                    description={`Defina qual embalagem usar para pedidos que contêm APENAS ${generalSettings.productTypeNames.miudos}.`}
+                                    title="Regras de Embalagem (Pedidos Específicos)"
+                                    description={`Defina qual embalagem usar para pedidos que contêm APENAS itens de uma categoria específica.`}
                                     rules={settings.expeditionRules.miudosPackagingRules}
                                     ruleType="miudosPackagingRules"
                                     onAdd={handleAddRule}

@@ -1,5 +1,6 @@
 
 import React, { useRef, useCallback, useState, useMemo, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Settings, Printer, Trash2, X, FileText, Loader2, Image as ImageIcon, Zap, Link as LinkIcon, PlusCircle, AlertTriangle, Package, File, Eye, History, UploadCloud, CheckCircle, Inbox } from 'lucide-react';
 import { ZplSettings, ExtractedZplData, GeneralSettings, StockItem, User, OrderItem, ZplPlatformSettings, EtiquetaHistoryItem, EtiquetasState, SkuLink, ScanLogItem, LabelProcessingStatus } from '../types';
 import { processZplStream } from '../services/zplService';
@@ -23,7 +24,7 @@ interface EtiquetasPageProps {
   allOrders: OrderItem[];
   setAllOrders: (orders: OrderItem[] | ((prev: OrderItem[]) => OrderItem[])) => void;
   etiquetasHistory: EtiquetaHistoryItem[];
-  onSaveHistory: (item: Omit<EtiquetaHistoryItem, 'id' | 'created_at'>) => void;
+  onSaveHistory: (item: Omit<EtiquetaHistoryItem, 'id' | 'created_at'>) => Promise<any>;
   onSaveStockItem: (item: Omit<StockItem, 'id'>) => Promise<StockItem | null>;
   generalSettings: GeneralSettings;
   setGeneralSettings: (settings: GeneralSettings | ((prev: GeneralSettings) => GeneralSettings)) => void;
@@ -32,9 +33,9 @@ interface EtiquetasPageProps {
   labelProcessingStatus: LabelProcessingStatus;
   setLabelProcessingStatus: React.Dispatch<React.SetStateAction<LabelProcessingStatus>>;
   addToast: (message: string, type: 'success' | 'error' | 'info') => void;
-}
-
-// ... (DraggableFooterEditor, SettingsModal, ProcessingModeModal mantidos iguais, omitindo para brevidade mas devem estar no arquivo final)
+    onLabelsUsed?: () => Promise<void>;
+  remainingLabels?: number | null;
+}// ... (DraggableFooterEditor, SettingsModal, ProcessingModeModal mantidos iguais, omitindo para brevidade mas devem estar no arquivo final)
 // Vou incluir apenas a função principal alterada para garantir que o contexto seja mantido.
 // Assumindo que os componentes auxiliares estão no arquivo original ou serão preservados se eu não os reescrever.
 // Para garantir, vou reescrever o arquivo com os imports e a função principal, mas omitindo os componentes auxiliares se eles não mudaram, 
@@ -350,6 +351,9 @@ const ProcessingModeModal: React.FC<{
 
 // --- Main Page Component ---
 const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
+    const navigate = useNavigate();
+    const { remainingLabels } = props;
+    const [isQuotaModalOpen, setIsQuotaModalOpen] = useState(false);
     const { settings, onSettingsSave, stockItems, etiquetasState, setEtiquetasState, allOrders, setAllOrders, currentUser, onSaveHistory, etiquetasHistory, onSaveStockItem, generalSettings, skuLinks, labelProcessingStatus, setLabelProcessingStatus, addToast } = props;
     const { zplInput, includeDanfe, zplPages, previews, extractedData } = etiquetasState;
 
@@ -433,15 +437,23 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
 
     const handleProcessRequest = useCallback(() => {
         if (!zplInput.trim()) return;
+        // Block if quota exhausted
+        if (typeof remainingLabels === 'number' && remainingLabels <= 0) {
+            setIsQuotaModalOpen(true);
+            return;
+        }
         setIsModeModalOpen(true);
-    }, [zplInput]);
+    }, [zplInput, remainingLabels]);
 
 
-    const handlePdfAction = useCallback(async () => {
+    // Export options modal
+    const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+    const [exportOptions, setExportOptions] = useState<{ sort: 'none' | 'alphabetical' | 'most_units'; filter: 'all' | 'multiSku' | 'multiUnit' }>({ sort: 'none', filter: 'all' });
+
+    const prepareAndGeneratePdf = useCallback(async (options: { sort: 'none' | 'alphabetical' | 'most_units'; filter: 'all' | 'multiSku' | 'multiUnit' }) => {
         setLabelProcessingStatus(prev => ({...prev, isActive: true, message: 'Montando PDF...'}));
         try {
-            // CORREÇÃO: Salvar histórico ANTES de tentar gerar o PDF.
-            // Isso garante que se houver erro na geração ou download, o registro não é perdido.
+            // Save history first (now awaits the RPC call)
             if (onSaveHistory && zplPages.length > 0) {
                 const pageHashes = zplPages.map(page => simpleHash(page));
                 const historyItem: Omit<EtiquetaHistoryItem, 'id' | 'created_at'> = { 
@@ -451,44 +463,112 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
                     settings_snapshot: settings, 
                     page_hashes: pageHashes 
                 };
-                await onSaveHistory(historyItem);
+                try {
+                    await onSaveHistory(historyItem);
+                } catch (histErr) {
+                    console.warn('Failed to save etiqueta history:', histErr);
+                    addToast('Aviso: não foi possível salvar histórico de etiquetas.', 'error');
+                    // continue mesmo assim (não bloqueia PDF)
+                }
             }
 
-            // Increment label usage in database
-            // CORREÇÃO: Contar apenas etiquetas reais, descontando DANFEs se "Incluir DANFE" estiver ativo.
-            // Se includeDanfe for true, cada "pedido" gera 2 páginas (DANFE + Etiqueta), então dividimos por 2.
-            // Se includeDanfe for false, cada página é uma etiqueta (ou o processamento já filtrou).
-            // A lógica aqui assume que zplPages contém pares (DANFE, Label).
-            let labelCount = zplPages.length / 2; 
-            
-            // Se estivermos processando apenas etiquetas (sem DANFE), a contagem deve ser ajustada.
-            // Mas o processador sempre gera pares internamente. A contagem de uso deve ser baseada em "envios".
-            // 1 Envio = 1 Etiqueta (independente de ter DANFE ou não).
-            
-             try {
-                await dbClient.rpc('increment_label_count', { amount: labelCount });
+            // Build pairs (each pair is [danfeIndex, labelIndex])
+            const pairs: Array<{ danfeIndex: number; labelIndex: number; data?: ExtractedZplData }> = [];
+            for (let i = 0; i < previews.length; i += 2) {
+                const pairData = extractedData.get(i);
+                pairs.push({ danfeIndex: i, labelIndex: i + 1, data: pairData });
+            }
+
+            // Apply filter
+            let filtered = pairs;
+            if (options.filter === 'multiSku') {
+                filtered = filtered.filter(p => (p.data?.skus?.length || 0) > 1);
+            } else if (options.filter === 'multiUnit') {
+                filtered = filtered.filter(p => (p.data?.skus?.some(s => s.qty > 1)));
+            }
+
+            // Apply sort
+            if (options.sort === 'alphabetical') {
+                const skuToName = (d?: ExtractedZplData) => {
+                    if (!d || !d.skus || d.skus.length === 0) return '';
+                    const firstSku = d.skus[0].sku;
+                    const link = skuLinks.find(l => l.importedSku === firstSku);
+                    const master = link ? stockItems.find(s => s.code === link.masterProductSku) : undefined;
+                    return master?.name || firstSku;
+                };
+                filtered = filtered.sort((a, b) => skuToName(a.data).localeCompare(skuToName(b.data)));
+            } else if (options.sort === 'most_units') {
+                const totalUnits = (d?: ExtractedZplData) => d?.skus.reduce((s, it) => s + (it.qty || 0), 0) || 0;
+                filtered = filtered.sort((a, b) => totalUnits(b.data) - totalUnits(a.data));
+            }
+
+            // Rebuild previews and processedData map in new order
+            const newPreviews: string[] = [];
+            const newProcessed = new Map<number, ExtractedZplData>();
+            let newIndex = 0;
+            for (const p of filtered) {
+                const danfe = previews[p.danfeIndex];
+                const label = previews[p.labelIndex];
+                newPreviews.push(danfe || '');
+                newPreviews.push(label || '');
+                if (p.data) newProcessed.set(newIndex, p.data);
+                newIndex += 2;
+            }
+
+            // Increment label usage in database: count by number of labels included (one per pair)
+            const labelCount = Math.ceil(newPreviews.length / 2);
+            // Check quota again before incrementing (race-safe best-effort)
+            if (typeof remainingLabels === 'number' && remainingLabels <= 0) {
+                setIsQuotaModalOpen(true);
+                setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota de etiquetas esgotada.'}));
+                return;
+            }
+            try {
+                const { data: result, error } = await dbClient.rpc('increment_label_count_safe', { amount: labelCount });
+                if (error) {
+                    console.error('Failed to increment label count:', error);
+                    addToast('Erro ao registrar consumo de etiquetas. Verifique sua cota.', 'error');
+                    setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                    return;
+                }
+                if (result && !result.success) {
+                    addToast(result.error || 'Cota de etiquetas insuficiente.', 'error');
+                    setIsQuotaModalOpen(true);
+                    setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota insuficiente.'}));
+                    return;
+                }
             } catch (rpcError) {
                 console.error("Failed to increment label count:", rpcError);
-                // Non-blocking error, proceed with PDF generation
+                addToast('Erro ao registrar consumo de etiquetas.', 'error');
+                setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                return;
             }
 
-            const pdfBlob = await buildPdf(previews, extractedData, settings, includeDanfe, stockItems, skuLinks);
+                    // Ask parent to refresh subscription/plan info so UI updates remaining labels
+                    try {
+                        if (props.onLabelsUsed) await props.onLabelsUsed();
+                    } catch (err) {
+                        console.warn('Failed to refresh labels/subscription after increment', err);
+                    }
+
+            const pdfBlob = await buildPdf(newPreviews, newProcessed, settings, includeDanfe, stockItems, skuLinks);
             const url = URL.createObjectURL(pdfBlob);
-            
             window.open(url, '_blank');
 
+            // Mark printed indices (best-effort: mark all label indices present in newPreviews)
             const indicesToMark = new Set<number>();
-            previews.forEach((p, index) => {
+            for (let i = 0; i < newPreviews.length; i++) {
+                const p = newPreviews[i];
                 if (p && p !== 'SKIPPED' && p !== 'ERROR') {
-                     if (includeDanfe) indicesToMark.add(index);
-                     else if (index % 2 !== 0) indicesToMark.add(index);
+                    if (includeDanfe) indicesToMark.add(i);
+                    else if (i % 2 !== 0) indicesToMark.add(i);
                 }
-            });
+            }
             setPrintedIndices(prev => new Set([...Array.from(prev), ...Array.from(indicesToMark)]));
 
-        } catch (error) { 
-            alert(`Falha ao gerar PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`); 
-        } finally { 
+        } catch (error) {
+            alert(`Falha ao gerar PDF: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+        } finally {
             setLabelProcessingStatus(prev => ({...prev, isActive: false, isFinished: true, message: 'PDF Gerado!'}));
         }
     }, [previews, extractedData, settings, includeDanfe, stockItems, skuLinks, onSaveHistory, currentUser, zplInput, zplPages, setLabelProcessingStatus]);
@@ -550,7 +630,7 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
                      <button onClick={() => setIsSettingsModalOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-primary)] font-semibold rounded-md border border-[var(--color-border)] shadow-sm hover:bg-[var(--color-surface-secondary)]">
                         <Settings size={16} /> Configurações
                     </button>
-                    <button id="process-button" onClick={handleProcessRequest} disabled={!zplInput.trim() || labelProcessingStatus.isActive} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-primary)] text-[var(--color-primary-text)] font-semibold rounded-md hover:bg-[var(--color-primary-hover)] disabled:opacity-50">
+                    <button id="process-button" onClick={handleProcessRequest} disabled={!zplInput.trim() || labelProcessingStatus.isActive || (typeof remainingLabels === 'number' && remainingLabels <= 0)} className="flex items-center gap-2 px-4 py-2 bg-[var(--color-primary)] text-[var(--color-primary-text)] font-semibold rounded-md hover:bg-[var(--color-primary-hover)] disabled:opacity-50">
                         <Zap size={16}/> Gerar Etiquetas
                     </button>
                 </div>
@@ -597,6 +677,20 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
                     </div>
                 </div>
             </div>
+
+            {/* Quota exceeded modal */}
+            {isQuotaModalOpen && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[200]">
+                    <div className="bg-white p-6 rounded-lg shadow-xl max-w-md text-center">
+                        <h2 className="text-xl font-bold mb-2 text-gray-800">Cota de Etiquetas Esgotada</h2>
+                        <p className="mb-4 text-gray-600">Sua conta não possui etiquetas disponíveis para gerar novas etiquetas. Faça upgrade do plano para continuar gerando.</p>
+                        <div className="flex justify-center gap-2">
+                            <button onClick={() => setIsQuotaModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-800">Fechar</button>
+                            <button onClick={() => { setIsQuotaModalOpen(false); navigate('/app/assinatura'); }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Ver Planos</button>
+                        </div>
+                    </div>
+                </div>
+            )}
             
             {(previews.length > 0 || labelProcessingStatus.isActive) && (
                 <div className="bg-[var(--color-surface)] p-4 rounded-lg border border-[var(--color-border)] shadow-sm">
@@ -612,7 +706,7 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
                                     <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${includeDanfe ? 'translate-x-6' : 'translate-x-1'}`}/>
                                 </button>
                             </div>
-                            <button onClick={handlePdfAction} disabled={previews.length === 0 || previews.every(p => !p) || labelProcessingStatus.isActive} className="flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-[var(--color-primary)] text-[var(--color-primary-text)] font-semibold disabled:opacity-50"><Printer size={16} /> Gerar PDF</button>
+                                     <button onClick={() => setIsExportModalOpen(true)} disabled={previews.length === 0 || previews.every(p => !p) || labelProcessingStatus.isActive} className="flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-[var(--color-primary)] text-[var(--color-primary-text)] font-semibold disabled:opacity-50"><Printer size={16} /> Gerar PDF</button>
                          </div>
                     </div>
                     {labelProcessingStatus.isActive ? (
@@ -652,6 +746,36 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
                 previews={previews} 
                 extractedData={extractedData} 
             />
+            {/* Export options modal */}
+            {isExportModalOpen && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+                    <div className="bg-[var(--color-surface)] p-6 rounded-xl border border-[var(--color-border)] shadow-xl w-full max-w-md">
+                        <h2 className="text-xl font-bold mb-4">Opções de Exportação</h2>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm font-medium">Ordenar por</label>
+                                <select value={exportOptions.sort} onChange={e => setExportOptions(o => ({...o, sort: e.target.value as any}))} className="mt-1 w-full p-2 border rounded-md bg-[var(--color-surface)] border-[var(--color-border)]">
+                                    <option value="none">Sem ordenação</option>
+                                    <option value="alphabetical">Ordem alfabética (primeiro produto)</option>
+                                    <option value="most_units">Mais unidades (desc)</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium">Filtro</label>
+                                <select value={exportOptions.filter} onChange={e => setExportOptions(o => ({...o, filter: e.target.value as any}))} className="mt-1 w-full p-2 border rounded-md bg-[var(--color-surface)] border-[var(--color-border)]">
+                                    <option value="all">Todos os pedidos</option>
+                                    <option value="multiSku">Apenas pedidos com múltiplos SKUs</option>
+                                    <option value="multiUnit">Apenas pedidos com quantidade &gt; 1</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div className="mt-6 flex justify-end gap-2">
+                            <button onClick={() => setIsExportModalOpen(false)} className="px-4 py-2 bg-[var(--color-surface-secondary)] rounded">Cancelar</button>
+                            <button onClick={() => { setIsExportModalOpen(false); prepareAndGeneratePdf(exportOptions); }} className="px-4 py-2 bg-[var(--color-primary)] text-[var(--color-primary-text)] rounded">Gerar PDF</button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <ProcessingModeModal isOpen={isModeModalOpen} onClose={() => setIsModeModalOpen(false)} onSelectMode={startProcessing} />
         </div>
     );

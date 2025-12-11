@@ -43,21 +43,29 @@ const PlanUsageCard: React.FC<{ subscription?: any }> = ({ subscription }) => {
 
     const labelCount = subscription?.monthly_label_count || 0;
     const rawLimit = subscription?.plan?.label_limit;
-    const labelLimit = typeof rawLimit === 'number' ? rawLimit : (isFree ? 100 : Infinity);
-    const limitText = Number.isFinite(labelLimit) ? labelLimit.toLocaleString() : 'Ilimitado';
+    // Use the actual label_limit from plan, default to 200 for test plan
+    const labelLimit = typeof rawLimit === 'number' && rawLimit > 0 ? rawLimit : (isFree ? 200 : 999999);
+    const limitText = Number.isFinite(labelLimit) && labelLimit < 999999 ? labelLimit.toLocaleString() : 'Ilimitado';
 
     const percentage = Number.isFinite(labelLimit) && labelLimit > 0 ? Math.min((labelCount / labelLimit) * 100, 100) : 0;
 
+    // Calculate days properly - allowing negative if expired
     const daysRemaining = subscription?.period_end 
-        ? Math.ceil((new Date(subscription.period_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) 
+        ? Math.floor((new Date(subscription.period_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) 
         : 0;
+
+    const isExpired = daysRemaining < 0;
+    const displayDays = isExpired ? daysRemaining : daysRemaining;
 
     const bonus = subscription?.bonus_balance || 0;
 
     return (
     <a href="#/app/assinatura" className="bg-[var(--color-surface)] p-6 rounded-lg border border-[var(--color-border)] shadow-sm h-full flex flex-col hover:shadow-md transition-shadow">
         <h3 className="text-md font-semibold text-[var(--color-text-primary)] mb-4">Uso do Plano</h3>
-        <p className="text-sm text-[var(--color-text-secondary)] mb-2">Seu plano atual é o <span className="font-semibold text-[var(--color-primary)]">{planName}</span>.</p>
+        <p className="text-sm text-[var(--color-text-secondary)] mb-2">Seu plano atual é o <span className={`font-semibold ${isExpired ? 'text-red-600' : 'text-[var(--color-primary)]'}`}>{planName}</span>.</p>
+        {isExpired && (
+            <p className="text-sm text-red-600 mb-4"><strong>⚠️ Devido ao plano expirar, não pode usar novamente a menos que assine um plano.</strong></p>
+        )}
         {bonus > 0 && (
             <p className="text-sm text-[var(--color-text-secondary)] mb-4">Saldo de bônus: <span className="font-semibold text-[var(--color-primary)]">{bonus.toLocaleString()} etiquetas</span></p>
         )}
@@ -73,13 +81,18 @@ const PlanUsageCard: React.FC<{ subscription?: any }> = ({ subscription }) => {
             </div>
             <div>
                 <div className="flex justify-between text-sm mb-1">
-                    <span className="font-medium">Dias Restantes</span>
-                    <span className="font-semibold">{daysRemaining} dias</span>
+                    <span className="font-medium">{isExpired ? '⏰ Teste Vencido' : 'Dias Restantes'}</span>
+                    <span className={`font-semibold ${isExpired ? 'text-red-600' : ''}`}>{isExpired ? 'Expirado' : `${displayDays} dias`}</span>
                 </div>
                 <div className="w-full bg-[var(--color-surface-secondary)] rounded-full h-2.5">
-                    <div className="bg-[var(--color-primary)] h-2.5 rounded-full" style={{ width: '100%' }}></div>
+                    <div className={`${isExpired ? 'bg-red-500' : 'bg-[var(--color-primary)]'} h-2.5 rounded-full`} style={{ width: '100%' }}></div>
                 </div>
             </div>
+            {isExpired && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-xs text-red-700"><strong>Aviso:</strong> Seu período de teste expirou. Você não pode usar novamente a menos que assine um plano.</p>
+                </div>
+            )}
         </div>
         <button className="w-full mt-4 px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text-primary)] font-semibold rounded-md border border-[var(--color-border)] hover:bg-[var(--color-surface-secondary)] transition-colors">
             Gerenciar Assinatura

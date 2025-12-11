@@ -54,6 +54,7 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
     const [selectedOrderGroupKeys, setSelectedOrderGroupKeys] = useState<Set<string>>(new Set());
     const [isConfirmBipModalOpen, setIsConfirmBipModalOpen] = useState(false);
     const [isConfirmDeleteModalOpen, setIsConfirmDeleteModalOpen] = useState(false);
+    const [isConfirmDeleteAllModalOpen, setIsConfirmDeleteAllModalOpen] = useState(false);
     const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
     const [arePrefsLoaded, setArePrefsLoaded] = useState(false);
 
@@ -218,19 +219,39 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
         
         const orderUpdatesPayload = ordersToUpdate.map(o => ({
             id: o.id,
+            order_id: o.orderId,
+            sku: o.sku,
+            organization_id: currentUser.organization_id,
             status: 'BIPADO' as const
         }));
     
-        const [{ error: scanError }, { error: orderError }] = await Promise.all([
-            dbClient.from('scan_logs').insert(newScansPayload),
-            dbClient.from('orders').upsert(orderUpdatesPayload)
-        ]);
-        
-        if (scanError || orderError) {
-            addToast(`Erro ao marcar pedidos como bipados. Tente novamente.`, 'error');
-        } else {
+        try {
+            // Insert scan logs
+            const { error: scanError } = await dbClient.from('scan_logs').insert(newScansPayload);
+            if (scanError) {
+                console.error('Scan log error:', scanError);
+                addToast(`Erro ao registrar bipagem. Tente novamente.`, 'error');
+                return;
+            }
+
+            // Update orders using upsert with proper unique constraint fields
+            const { error: orderError } = await dbClient
+                .from('orders')
+                .upsert(orderUpdatesPayload, {
+                    onConflict: 'organization_id,order_id,sku'
+                });
+            
+            if (orderError) {
+                console.error('Order update error:', orderError);
+                addToast(`Erro ao atualizar pedidos como bipados. Tente novamente.`, 'error');
+                return;
+            }
+            
             addToast(`${orderIdsToUpdate.length} pedido(s) marcado(s) como bipado(s).`, 'success');
             setSelectedOrderGroupKeys(new Set());
+        } catch (err: any) {
+            console.error('Error marking orders as bipped:', err);
+            addToast(`Erro ao marcar pedidos como bipados. Tente novamente.`, 'error');
         }
     };
     
@@ -238,6 +259,41 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
         onDeleteOrders(Array.from(selectedOrderGroupKeys));
         setSelectedOrderGroupKeys(new Set());
         setIsConfirmDeleteModalOpen(false);
+    };
+
+    const handleDeleteAll = async () => {
+        if (allOrders.length === 0) {
+            addToast('Nenhum pedido para excluir.', 'info');
+            return;
+        }
+
+        try {
+            // Delete all orders for this organization
+            const { error } = await dbClient
+                .from('orders')
+                .delete()
+                .eq('organization_id', currentUser.organization_id);
+            
+            if (error) {
+                console.error('Error deleting all orders:', error);
+                addToast('Erro ao excluir todos os pedidos. Tente novamente.', 'error');
+                return;
+            }
+
+            // Also delete related scan logs
+            await dbClient
+                .from('scan_logs')
+                .delete()
+                .eq('organization_id', currentUser.organization_id);
+
+            setAllOrders([]);
+            setScanHistory([]);
+            setSelectedOrderGroupKeys(new Set());
+            addToast(`Todos os ${allOrders.length} pedido(s) e registros de bipagem foram excluídos.`, 'success');
+        } catch (err: any) {
+            console.error('Error deleting all orders:', err);
+            addToast('Erro ao excluir pedidos. Tente novamente.', 'error');
+        }
     };
 
     const toggleGroupExpansion = (orderId: string) => {
@@ -326,6 +382,22 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
                         </div>
                     </div>
                 )}
+
+                {allOrders.length > 0 && currentUser.role === 'DONO_SAAS' && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+                        <span className="font-semibold text-red-800">Zona de Perigo: {allOrders.length} pedido(s) total</span>
+                        <button 
+                            onClick={() => {
+                                if (window.confirm('Tem CERTEZA que deseja excluir TODOS os pedidos e registros de bipagem? Esta ação NÃO pode ser desfeita!')) {
+                                    handleDeleteAll();
+                                }
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-red-700 text-white font-semibold rounded-md shadow-sm hover:bg-red-900"
+                        >
+                            <Trash2 size={16}/> Excluir Tudo
+                        </button>
+                    </div>
+                )}
                 
                 <div className="flex-grow overflow-auto rounded-lg border border-[var(--color-border)] min-h-0">
                     <table className="min-w-full text-sm">
@@ -388,6 +460,20 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
                     itemsPerPage={itemsPerPage}
                     onPageChange={setCurrentPage}
                 />
+
+                {/* Zona de Perigo */}
+                <div className="mt-6 p-4 rounded-lg border border-red-300 bg-red-50">
+                    <h3 className="text-lg font-bold text-red-700 mb-3">⚠️ Zona de Perigo</h3>
+                    <p className="text-sm text-red-600 mb-4">Excluir todos os pedidos é uma ação irreversível. Todos os pedidos e registros de bipagem serão removidos permanentemente.</p>
+                    <button
+                        onClick={() => setIsConfirmDeleteAllModalOpen(true)}
+                        disabled={allOrders.length === 0}
+                        className="px-4 py-2 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <Trash2 size={16} className="inline mr-2" />
+                        Excluir Tudo
+                    </button>
+                </div>
             </div>
 
             <ConfirmActionModal
@@ -418,6 +504,27 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
                     </>
                 }
                 confirmButtonText="Sim, Excluir Pedidos"
+            />
+
+            <ConfirmActionModal
+                isOpen={isConfirmDeleteAllModalOpen}
+                onClose={() => setIsConfirmDeleteAllModalOpen(false)}
+                onConfirm={handleDeleteAll}
+                title="Excluir TODOS os Pedidos"
+                message={
+                    <>
+                        <p>Você está prestes a <strong>DELETAR PERMANENTEMENTE</strong> todos os pedidos do seu sistema:</p>
+                        <p className="font-bold text-lg text-red-700 my-3">{allOrders.length} Pedidos</p>
+                        <p className="text-red-600">Esta ação:</p>
+                        <ul className="list-disc ml-6 text-red-600 mb-3">
+                            <li>Removerá todos os pedidos importados</li>
+                            <li>Apagará todos os registros de bipagem</li>
+                            <li>É irreversível e não pode ser desfeita</li>
+                        </ul>
+                        <p className="font-bold text-red-700">Tem certeza absoluta?</p>
+                    </>
+                }
+                confirmButtonText="Sim, Excluir TUDO"
             />
         </div>
     );

@@ -146,7 +146,7 @@ const ImporterPage: React.FC<ImporterPageProps> = (props) => {
             data.summary.totalUnidades = displayOrders.reduce((sum, item) => sum + (item.qty_final || 0), 0);
             data.skusNaoVinculados = Array.from(new Set(displayOrders.map(i => i.sku))).filter(sku => !skuLinkMap.has(sku)).map(sku => ({ sku, colorSugerida: classificarCor(sku) }));
 
-            if (data.canal === 'SHOPEE' && data.lists.completa.some(o => o.shippingDate)) {
+            if ((data.canal === 'SHOPEE' || data.canal === 'ML') && data.lists.completa.some(o => o.shippingDate || o.data)) {
                  const filteredOrders = await new Promise<OrderItem[]>((resolve) => {
                     const handleConfirm = (start: string, end: string) => {
                         const startDate = new Date(`${start}T00:00:00Z`);

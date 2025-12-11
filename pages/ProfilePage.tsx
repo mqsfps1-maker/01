@@ -110,9 +110,9 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
         <div className="flex flex-col sm:flex-row items-center gap-6">
           <div className="relative">
             {avatar ? (
-              <img src={avatar} alt="Avatar" className="w-24 h-24 rounded-full object-cover bg-gray-700" />
+              <img src={avatar} alt="Avatar" className="w-24 h-24 rounded-full object-cover bg-gray-700 border-4 border-[var(--color-primary)]" />
             ) : (
-              <div className="w-24 h-24 rounded-full bg-[var(--color-surface-secondary)] flex items-center justify-center">
+              <div className="w-24 h-24 rounded-full bg-[var(--color-surface-secondary)] flex items-center justify-center border-4 border-[var(--color-border)]">
                 <UserIcon size={48} className="text-[var(--color-text-secondary)]" />
               </div>
             )}
@@ -173,7 +173,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
                   value={user.cpfCnpj || ''}
                   disabled
                   readOnly
-                  className="mt-1 block w-full rounded-md border-[var(--color-border)] bg-[var(--color-surface-tertiary)] shadow-sm sm:text-sm p-2 text-[var(--color-text-secondary)] cursor-not-allowed opacity-70"
+                  className="mt-1 block w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-secondary)] shadow-sm sm:text-sm p-2 text-[var(--color-text-primary)] cursor-pointer"
                 />
             </div>
             <div>
@@ -250,6 +250,21 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
           >
             <Save size={16} /> Salvar Alterações
           </button>
+        </div>
+
+        {/* Debug Info */}
+        <div className="mt-8 p-4 bg-[var(--color-surface-secondary)] rounded-lg border border-[var(--color-border)]">
+          <h3 className="text-sm font-bold text-[var(--color-text-secondary)] mb-3">Informações de Assinatura (DEBUG)</h3>
+          <div className="text-xs space-y-2 font-mono text-[var(--color-text-secondary)]">
+            <p><strong>Plano:</strong> {planName}</p>
+            <p><strong>Status:</strong> {subscription?.status || 'N/A'}</p>
+            <p><strong>Limite Etiquetas:</strong> {subscription?.plan?.label_limit || 200}</p>
+            <p><strong>Etiquetas Usadas:</strong> {subscription?.monthly_label_count || 0}</p>
+            <p><strong>Bônus:</strong> {subscription?.bonus_balance || 0}</p>
+            <p><strong>Período End:</strong> {subscription?.period_end ? new Date(subscription.period_end).toLocaleString('pt-BR') : 'N/A'}</p>
+            <p><strong>Dias Restantes:</strong> {subscription?.period_end ? Math.ceil((new Date(subscription.period_end).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : 'N/A'}</p>
+            <p><strong>Agora:</strong> {new Date().toLocaleString('pt-BR')}</p>
+          </div>
         </div>
       </div>
     </div>

@@ -85,9 +85,10 @@ const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, setIsCollapsed, generalS
 
   const SidebarContent = ({ forMobile = false }: { forMobile?: boolean }) => (
     <>
-      <div className={`flex items-center justify-center px-4 py-5 border-b border-[var(--color-border)] h-[69px]`}>
+      <div className={`flex flex-col items-center justify-center px-4 py-4 border-b border-[var(--color-border)]`}>
         <Tag className="h-8 w-8 text-[var(--color-primary)] flex-shrink-0" />
-        <span className={`ml-2 text-xl font-bold text-[var(--color-text-primary)] transition-opacity duration-200 ${(forMobile ? false : isCollapsed) ? 'opacity-0' : 'opacity-100'}`}>TagsFlow</span>
+        <span className={`mt-2 text-lg font-bold text-[var(--color-text-primary)] transition-opacity duration-200 ${(forMobile ? false : isCollapsed) ? 'opacity-0' : 'opacity-100'}`}>TheTagsFlow</span>
+        <span className={`mt-1 text-xs text-[var(--color-text-secondary)] text-center font-medium transition-opacity duration-200 ${(forMobile ? false : isCollapsed) ? 'opacity-0' : 'opacity-100'}`}>{currentUser?.name || 'Sua Empresa'}</span>
       </div>
       
       <nav className="flex-1 p-4 space-y-2 overflow-y-auto overflow-x-hidden">

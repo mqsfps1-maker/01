@@ -518,23 +518,125 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
             // Increment label usage in database: count by number of labels included (one per pair)
             const labelCount = Math.ceil(newPreviews.length / 2);
             // Check quota again before incrementing (race-safe best-effort)
+            // Ninguém pode bypassar a quota - nem "kelvin" plano
+            
             if (typeof remainingLabels === 'number' && remainingLabels <= 0) {
                 setIsQuotaModalOpen(true);
                 setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota de etiquetas esgotada.'}));
+                addToast('Sua cota de etiquetas foi atingida. Faça upgrade do plano para continuar.', 'error');
                 return;
             }
             try {
-                const { data: result, error } = await dbClient.rpc('increment_label_count_safe', { amount: labelCount });
-                if (error) {
-                    console.error('Failed to increment label count:', error);
-                    addToast('Erro ao registrar consumo de etiquetas. Verifique sua cota.', 'error');
-                    setLabelProcessingStatus(prev => ({...prev, isActive: false}));
-                    return;
+                // Try to call RPC if it exists, otherwise fallback to direct update
+                let incrementSuccess = false;
+                let incrementError: string | null = null;
+                
+                try {
+                    const { data: result, error } = await dbClient.rpc('increment_label_count_safe', { amount: labelCount });
+                    if (error) {
+                        console.warn('RPC failed, will use fallback:', error);
+                        // Continue to fallback
+                    } else if (result && result.success === false) {
+                        addToast(result.error || 'Cota de etiquetas insuficiente.', 'error');
+                        setIsQuotaModalOpen(true);
+                        setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota insuficiente.'}));
+                        return;
+                    } else if (result && result.success === true) {
+                        incrementSuccess = true;
+                    }
+                } catch (rpcError) {
+                    console.warn('RPC not available, using fallback increment:', rpcError);
                 }
-                if (result && !result.success) {
-                    addToast(result.error || 'Cota de etiquetas insuficiente.', 'error');
-                    setIsQuotaModalOpen(true);
-                    setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota insuficiente.'}));
+
+                // Fallback: Direct update to subscriptions table
+                if (!incrementSuccess) {
+                    // Validação defensiva - garantir que organization_id existe
+                    if (!currentUser.organization_id) {
+                        console.error('User organization_id is missing:', currentUser);
+                        addToast('Erro: organização do usuário não configurada. Contate o suporte.', 'error');
+                        setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                        return;
+                    }
+
+                    const { data: subData, error: subError } = await dbClient
+                        .from('subscriptions')
+                        .select('monthly_label_count, plan:plans(*)')
+                        .eq('organization_id', currentUser.organization_id)
+                        .maybeSingle();
+                    
+                    if (subError) {
+                        console.error('Subscription query error:', subError);
+                        addToast('Erro ao verificar cota. Tente novamente.', 'error');
+                        setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                        return;
+                    }
+
+                    // Se não houver assinatura, criar uma com plano padrão (Grátis - 200 etiquetas)
+                    let currentCount = 0;
+                    let planLimit = 200;
+                    
+                    if (!subData) {
+                        console.warn('No subscription found, creating default subscription for organization:', currentUser.organization_id);
+                        
+                        // Obter plano Grátis
+                        const { data: plans } = await dbClient.from('plans').select('id, label_limit').eq('name', 'Plano Grátis (Teste)').single();
+                        const planId = plans?.id || 1;
+                        const planLimitDefault = plans?.label_limit || 200;
+                        
+                        // Criar assinatura padrão
+                        const trialEndDate = new Date();
+                        trialEndDate.setDate(trialEndDate.getDate() + 7);
+                        
+                        const { error: createError } = await dbClient.from('subscriptions').insert({
+                            organization_id: currentUser.organization_id,
+                            plan_id: planId,
+                            status: 'trialing',
+                            period_end: trialEndDate.toISOString(),
+                            monthly_label_count: 0,
+                            bonus_balance: 0
+                        });
+                        
+                        if (createError) {
+                            console.error('Failed to create subscription:', createError);
+                            addToast('Erro ao criar assinatura. Tente novamente.', 'error');
+                            setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                            return;
+                        }
+                        
+                        planLimit = planLimitDefault;
+                        currentCount = 0;
+                    } else {
+                        currentCount = subData.monthly_label_count || 0;
+                        planLimit = subData.plan?.label_limit || 200;
+                    }
+
+                    const newCount = currentCount + labelCount;
+
+                    if (newCount > planLimit) {
+                        addToast(`Cota insuficiente. Limite: ${planLimit}, Necessário: ${newCount}`, 'error');
+                        setIsQuotaModalOpen(true);
+                        setLabelProcessingStatus(prev => ({...prev, isActive: false, message: 'Cota insuficiente.'}));
+                        return;
+                    }
+
+                    const { error: updateError } = await dbClient
+                        .from('subscriptions')
+                        .update({ monthly_label_count: newCount })
+                        .eq('organization_id', currentUser.organization_id);
+                    
+                    if (updateError) {
+                        console.error('Failed to update label count:', updateError);
+                        addToast('Erro ao registrar consumo de etiquetas. Tente novamente.', 'error');
+                        setLabelProcessingStatus(prev => ({...prev, isActive: false}));
+                        return;
+                    }
+                    
+                    incrementSuccess = true;
+                }
+
+                if (!incrementSuccess) {
+                    addToast('Erro ao registrar consumo de etiquetas.', 'error');
+                    setLabelProcessingStatus(prev => ({...prev, isActive: false}));
                     return;
                 }
             } catch (rpcError) {
@@ -682,11 +784,11 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
             {isQuotaModalOpen && (
                 <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[200]">
                     <div className="bg-white p-6 rounded-lg shadow-xl max-w-md text-center">
-                        <h2 className="text-xl font-bold mb-2 text-gray-800">Cota de Etiquetas Esgotada</h2>
-                        <p className="mb-4 text-gray-600">Sua conta não possui etiquetas disponíveis para gerar novas etiquetas. Faça upgrade do plano para continuar gerando.</p>
-                        <div className="flex justify-center gap-2">
-                            <button onClick={() => setIsQuotaModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-800">Fechar</button>
-                            <button onClick={() => { setIsQuotaModalOpen(false); navigate('/app/assinatura'); }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Ver Planos</button>
+                        <h2 className="text-xl font-bold mb-2 text-gray-800">🔒 Cota de Etiquetas Esgotada</h2>
+                        <p className="mb-4 text-gray-600">Sua conta atingiu o limite de etiquetas do seu plano. Você precisa fazer upgrade para um plano superior ou comprar mais etiquetas para continuar gerando.</p>
+                        <div className="flex flex-col gap-2">
+                            <button onClick={() => { setIsQuotaModalOpen(false); navigate('/app/assinatura'); }} className="w-full px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-semibold">📈 Assinar Plano Melhor</button>
+                            <button onClick={() => setIsQuotaModalOpen(false)} className="w-full px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-gray-800">Fechar</button>
                         </div>
                     </div>
                 </div>

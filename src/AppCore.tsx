@@ -11,7 +11,6 @@ import {
     UserSetor, UserRole, ScanResult, UiSettings, defaultZplSettings, defaultGeneralSettings 
 } from './types';
 import { Plan, Subscription } from './types';
-import { Loader2 } from 'lucide-react';
 
 import Sidebar from './components/Sidebar';
 import MobileHeader from './components/MobileHeader';
@@ -71,7 +70,7 @@ interface AppCoreProps {
 }
 
 const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(false); // Muda para false para entrar direto
     const [subscription, setSubscription] = useState<Subscription | null>(null);
     const [remainingLabels, setRemainingLabels] = useState<number | null>(null);
     const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
@@ -139,9 +138,17 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 const trialEndDate = new Date(userCreatedAt);
                 trialEndDate.setDate(trialEndDate.getDate() + trialDurationDays);
 
+                console.log('Subscription Data Check:', {
+                    hasSubData: !!subData,
+                    userCreatedAt: userCreatedAt.toISOString(),
+                    trialEndDate: trialEndDate.toISOString(),
+                    now: new Date().toISOString(),
+                    isTrialExpired: new Date().getTime() > trialEndDate.getTime()
+                });
+
                 const defaultSubscription = {
                     status: 'trialing',
-                    plan: { name: 'Plano Grátis (Teste)', max_users: 2, price: 0 },
+                    plan: { name: 'Plano Grátis (Teste)', max_users: 2, price: 0, label_limit: 200 },
                     period_end: trialEndDate.toISOString()
                 };
                 const activeSubscription = subData || defaultSubscription;
@@ -166,9 +173,9 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                     const periodEnd = new Date(activeSubscription.period_end);
                     const diffTime = periodEnd.getTime() - now;
                     let diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                    // never show negative days to the user
+                    // Allow negative days to show expiration status
                     if (isNaN(diffDays)) diffDays = 0;
-                    setDaysLeft(Math.max(0, diffDays));
+                    setDaysLeft(diffDays);
 
                     // Check trial expiration
                     if ((!subData || activeSubscription.status === 'trialing') && now > periodEnd.getTime()) {
@@ -243,7 +250,16 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 setAllOrders((allOrdersRes.data || []).map((o: any) => ({ ...o, orderId: o.order_id, customer_name: o.customer_name, customer_cpf_cnpj: o.customer_cpf_cnpj })));
                 setEtiquetasHistory(etiquetasHistoryRes.data || []);
                 setScanHistory((scanHistoryRes.data || []).map((s: any) => ({...s, time: new Date(s.scanned_at), user: s.user_name, displayKey: s.display_key})));
-                setImportHistory(importHistoryRes.data || []);
+                setImportHistory((importHistoryRes.data || []).map((h: any) => ({
+                    id: h.id,
+                    fileName: h.file_name,
+                    processedAt: h.processed_at,
+                    user: h.user_name,
+                    itemCount: h.item_count,
+                    unlinkedCount: h.unlinked_count,
+                    canal: h.canal,
+                    processedData: h.processed_data
+                })));
                 setProdutosCombinados((produtosCombinadosRes.data || []).map((p: any) => ({productSku: p.product_sku, items: p.items})));
                 setCustomers((customersRes.data || []).map((c: any) => ({...c, cpfCnpj: c.cpf_cnpj, orderHistory: c.order_history})));
                 setProductionPlans(productionPlansRes.data || []);
@@ -393,9 +409,35 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     const onSaveStockItem = async (itemData: StockItem): Promise<StockItem | null> => {
         if (!user?.organization_id) return null;
         const isNew = !itemData.id;
-        const payload = { ...itemData, id: isNew ? undefined : itemData.id, organization_id: user.organization_id };
+        
+        // Build payload with only valid DB columns
+        const payload: any = {
+            code: itemData.code,
+            name: itemData.name,
+            kind: itemData.kind,
+            unit: itemData.unit,
+            current_qty: itemData.current_qty || 0,
+            min_qty: itemData.min_qty || 0,
+            category: itemData.category || null,
+            color: itemData.color || null,
+            composition: itemData.composition || null,
+            product_type: itemData.product_type || null,
+            expedition_items: itemData.expedition_items || null,
+            substitute_product_code: itemData.substitute_product_code || null,
+            linked_skus: itemData.linked_skus || null,
+            organization_id: user.organization_id
+        };
+        
+        if (!isNew && itemData.id) {
+            payload.id = itemData.id;
+        }
+        
         try {
-            const { data, error } = await dbClient.from('stock_items').upsert(payload).select().single();
+            const { data, error } = await dbClient
+                .from('stock_items')
+                .upsert(payload, { onConflict: 'organization_id,code' })
+                .select()
+                .single();
             if (error) {
                 console.error('Failed to save stock_item:', error);
                 addToast(`Erro ao salvar produto "${itemData.name}": ${error.message || ''}`, 'error');
@@ -478,14 +520,68 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
 
     const handleLaunch = async (data: { ordersToCreate: OrderItem[], ordersToUpdate: OrderItem[] }) => {
         if (!user?.organization_id) return;
+        
+        // Prepare orders payload
         const payload = [...data.ordersToCreate, ...data.ordersToUpdate].map(o => ({
             order_id: o.orderId, tracking: o.tracking, sku: o.sku, qty_original: o.quantity, multiplicador: o.multiplicador,
             qty_final: o.qty_final, color: o.color, canal: o.canal, data: o.data, status: o.status,
             customer_name: o.customer_name, customer_cpf_cnpj: o.customer_cpf_cnpj, organization_id: user.organization_id
         }));
+        
+        // Extract unique customers from orders
+        const uniqueCustomers = new Map<string, { name: string; cpf_cnpj: string }>();
+        [...data.ordersToCreate, ...data.ordersToUpdate].forEach(order => {
+            if (order.customer_cpf_cnpj && order.customer_name) {
+                uniqueCustomers.set(order.customer_cpf_cnpj, {
+                    name: order.customer_name,
+                    cpf_cnpj: order.customer_cpf_cnpj
+                });
+            }
+        });
+
+        // Save orders
         if(payload.length > 0) {
-            await dbClient.from('orders').upsert(payload, { onConflict: 'organization_id,order_id,sku' });
+            const { error: orderError } = await dbClient
+                .from('orders')
+                .upsert(payload, { onConflict: 'organization_id,order_id,sku' });
+            if (orderError) {
+                console.error('Error saving orders:', orderError);
+                addToast('Erro ao salvar pedidos.', 'error');
+                return;
+            }
+            // Update local state with new orders
+            setAllOrders(prev => [...payload, ...prev]);
         }
+
+        // Save customers
+        if (uniqueCustomers.size > 0) {
+            const customerPayload = Array.from(uniqueCustomers.values()).map(c => ({
+                name: c.name,
+                cpf_cnpj: c.cpf_cnpj,
+                organization_id: user.organization_id,
+                order_history: []
+            }));
+            const { error: customerError } = await dbClient
+                .from('customers')
+                .upsert(customerPayload, { onConflict: 'organization_id,cpf_cnpj' });
+            if (customerError) {
+                console.error('Error saving customers:', customerError);
+                // Don't fail the whole operation for customer save errors
+            } else {
+                // Update local state with new customers
+                setCustomers(prev => {
+                    const existing = new Map(prev.map(c => [c.cpf_cnpj, c]));
+                    customerPayload.forEach(newCustomer => {
+                        if (!existing.has(newCustomer.cpf_cnpj)) {
+                            existing.set(newCustomer.cpf_cnpj, { ...newCustomer, id: newCustomer.cpf_cnpj, cpfCnpj: newCustomer.cpf_cnpj, orderHistory: [] });
+                        }
+                    });
+                    return Array.from(existing.values());
+                });
+            }
+        }
+        
+        addToast(`${payload.length} pedido(s) e clientes salvos com sucesso!`, 'success');
     };
   
     const handleSaveProductionPlan = async (plan: Omit<ProductionPlan, 'id' | 'createdAt' | 'createdBy'>): Promise<ProductionPlan | null> => {
@@ -824,8 +920,63 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         }
     };
     
-    if (isLoading) {
-        return <div className="flex h-screen w-full items-center justify-center bg-[var(--color-bg)]"><Loader2 size={48} className="animate-spin text-[var(--color-primary)]"/></div>;
+    
+    // Check if trial has expired and user is not on subscription page
+    const now = new Date().getTime();
+    const isOnSubscriptionOrProfile = location.pathname.startsWith('/app/assinatura') || location.pathname === '/app/perfil';
+    
+    if (subscription?.status === 'trialing' && subscription?.period_end) {
+        const periodEnd = new Date(subscription.period_end).getTime();
+        const isTrialExpired = now > periodEnd;
+        
+        console.log('Trial Status:', {
+            status: subscription?.status,
+            periodEnd: new Date(subscription.period_end).toISOString(),
+            now: new Date(now).toISOString(),
+            isTrialExpired,
+            isOnSubscriptionOrProfile,
+            pathname: location.pathname
+        });
+        
+        if (isTrialExpired && !isOnSubscriptionOrProfile) {
+            return (
+                <div className="flex h-screen w-full items-center justify-center bg-[var(--color-bg)]">
+                    <div className="bg-[var(--color-surface)] p-8 rounded-xl border border-[var(--color-border)] shadow-2xl max-w-md text-center">
+                        <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-4">⏰ Período de Teste Expirado</h2>
+                        <p className="text-[var(--color-text-secondary)] mb-6">
+                            Seu período de teste de 7 dias terminou. Para continuar usando a plataforma, você precisa assinar um plano.
+                        </p>
+                        <button 
+                            onClick={() => navigate('/app/assinatura')}
+                            className="w-full px-6 py-3 bg-[var(--color-primary)] text-[var(--color-primary-text)] font-bold rounded-lg hover:bg-[var(--color-primary-hover)] transition-colors"
+                        >
+                            Ver Planos de Assinatura
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+    }
+
+    // Check if labels quota is exhausted (for any plan)
+    const hasNoLabelsLeft = remainingLabels !== null && remainingLabels <= 0;
+    if (hasNoLabelsLeft && !isOnSubscriptionOrProfile) {
+        return (
+            <div className="flex h-screen w-full items-center justify-center bg-[var(--color-bg)]">
+                <div className="bg-[var(--color-surface)] p-8 rounded-xl border border-[var(--color-border)] shadow-2xl max-w-md text-center">
+                    <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-4">🔒 Cota de Etiquetas Esgotada</h2>
+                    <p className="text-[var(--color-text-secondary)] mb-6">
+                        Você atingiu o limite de etiquetas do seu plano. Faça upgrade para um plano superior para continuar gerando etiquetas.
+                    </p>
+                    <button 
+                        onClick={() => navigate('/app/assinatura')}
+                        className="w-full px-6 py-3 bg-[var(--color-primary)] text-[var(--color-primary-text)] font-bold rounded-lg hover:bg-[var(--color-primary-hover)] transition-colors"
+                    >
+                        Fazer Upgrade Agora
+                    </button>
+                </div>
+            </div>
+        );
     }
     
     const isEmployee = user?.role === 'FUNCIONARIO';
@@ -861,7 +1012,7 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                     <Routes>
                         <Route path="dashboard" element={<DashboardPage allOrders={allOrders} scanHistory={scanHistory} stockItems={stockItems} generalSettings={generalSettings} importHistory={importHistory} onBulkUpdateStockItems={handleBulkUpdateStockItems} subscription={subscription} onRefresh={refreshData} />} />
                         <Route path="importer" element={<ImporterPage allOrders={allOrders} selectedFile={selectedFile} setSelectedFile={setSelectedFile} processedData={processedData} setProcessedData={setProcessedData} error={importerError} setError={setImporterError} isProcessing={isProcessing} setIsProcessing={setIsProcessing} onLaunch={handleLaunch} skuLinks={skuLinks} onLinkSku={handleLinkSku} onUnlinkSku={handleUnlinkSku} products={stockItems} onSaveStockItem={onSaveStockItem as any} onSaveProdutoCombinado={handleSaveProdutoCombinado} produtosCombinados={produtosCombinados} stockItems={stockItems} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} currentUser={user!} importHistory={importHistory} addImportToHistory={handleAddImportToHistory} clearImportHistory={() => setImportHistory([])} onDeleteImportHistoryItem={handleDeleteImportHistoryItem} addToast={addToast} customers={customers} unlinkedSkus={[]} />} />
-                        <Route path="etiquetas" element={<EtiquetasPage settings={etiquetasSettings} onSettingsSave={setEtiquetasSettings} stockItems={stockItems} etiquetasState={etiquetasState} setEtiquetasState={setEtiquetasState} currentUser={user!} allOrders={allOrders} setAllOrders={setAllOrders} etiquetasHistory={etiquetasHistory} onSaveHistory={(item) => setEtiquetasHistory(prev => [{...item, id: `hist_${Date.now()}`, created_at: new Date().toISOString()}, ...prev])} onSaveStockItem={onSaveStockItem as any} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} skuLinks={skuLinks} scanHistory={scanHistory} labelProcessingStatus={labelProcessingStatus} setLabelProcessingStatus={setLabelProcessingStatus} addToast={addToast} onLabelsUsed={refreshData} remainingLabels={remainingLabels} />} />
+                        <Route path="etiquetas" element={<EtiquetasPage settings={etiquetasSettings} onSettingsSave={setEtiquetasSettings} stockItems={stockItems} etiquetasState={etiquetasState} setEtiquetasState={setEtiquetasState} currentUser={user!} allOrders={allOrders} setAllOrders={setAllOrders} etiquetasHistory={etiquetasHistory} onSaveHistory={handleSaveEtiquetaHistory} onSaveStockItem={onSaveStockItem as any} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} skuLinks={skuLinks} scanHistory={scanHistory} labelProcessingStatus={labelProcessingStatus} setLabelProcessingStatus={setLabelProcessingStatus} addToast={addToast} onLabelsUsed={refreshData} remainingLabels={remainingLabels} />} />
                         <Route path="pedidos" element={<PedidosPage allOrders={allOrders} scanHistory={scanHistory} setAllOrders={setAllOrders} setScanHistory={setScanHistory} currentUser={user!} generalSettings={generalSettings} addToast={addToast} onDeleteOrders={handleDeleteOrders} />} />
                         <Route path="bipagem" element={<BipagemPage allOrders={allOrders} onNewScan={handleNewScan} onBomDeduction={()=>{}} scanHistory={scanHistory} onCancelBipagem={()=>{}} onBulkCancelBipagem={async () => {}} onHardDeleteScanLog={handleHardDeleteScanLog} onBulkHardDeleteScanLog={onBulkHardDeleteScanLog} products={stockItems} users={users} onAddNewUser={handleAddNewUser} onSaveUser={handleUpdateUser} uiSettings={user?.ui_settings || defaultUiSettings} currentUser={user!} onSyncPending={async () => {}} skuLinks={skuLinks} addToast={addToast} currentPage={location.pathname.split('/')[2] || 'bipagem'} isAutoBipagemActive={isAutoBipagemActive} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} />} />
                         <Route path="produtos" element={<ProductPage stockItems={stockItems} produtosCombinados={produtosCombinados} onSaveProdutoCombinado={handleSaveProdutoCombinado} unlinkedSkus={[]} setUnlinkedSkus={() => {}} onSaveStockItem={onSaveStockItem as any} onDeleteStockItem={handleDeleteStockItem} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} />} />

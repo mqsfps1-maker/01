@@ -122,10 +122,7 @@ const App: React.FC = () => {
         if (data) return data as User;
         
         if (error) {
-             console.warn("Profile fetch failed, attempting self-healing...");
-             await dbClient.rpc('create_my_profile_if_missing');
-             const { data: retryData } = await dbClient.from('users').select('*').eq('id', userId).single();
-             return retryData as User;
+             console.warn("Profile fetch failed:", error.message);
         }
         return null;
     };

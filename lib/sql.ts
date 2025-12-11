@@ -26,14 +26,14 @@ CREATE TYPE public.order_status_value AS ENUM ('NORMAL', 'BIPADO');
 CREATE TYPE public.scan_status AS ENUM ('OK', 'DUPLICATE', 'NOT_FOUND', 'ADJUSTED', 'CANCELLED');
 
 -- 4. Tabelas
-CREATE TABLE public.plans ( id SERIAL PRIMARY KEY, name TEXT NOT NULL, price REAL, max_users INT, features JSONB, active BOOLEAN DEFAULT TRUE, stripe_price_id TEXT );
+CREATE TABLE public.plans ( id SERIAL PRIMARY KEY, name TEXT NOT NULL, price REAL, max_users INT, features JSONB, active BOOLEAN DEFAULT TRUE, stripe_price_id TEXT, label_limit INT DEFAULT 200 );
 CREATE TABLE public.organizations ( id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(), name TEXT NOT NULL, cpf_cnpj TEXT UNIQUE, owner_id UUID, plan_id INT REFERENCES public.plans(id), stripe_customer_id TEXT, max_users INT DEFAULT 2, created_at TIMESTAMPTZ DEFAULT NOW() );
 CREATE TABLE public.users ( id UUID PRIMARY KEY, name TEXT, email TEXT, phone TEXT, role public.user_role NOT NULL, organization_id UUID REFERENCES public.organizations(id) ON DELETE SET NULL, cpf_cnpj TEXT, auth_provider TEXT, ui_settings JSONB, setor TEXT[], prefix TEXT, attendance JSONB, avatar TEXT, has_set_password BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW() );
 
 ALTER TABLE public.users ADD CONSTRAINT users_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id) ON DELETE CASCADE;
 ALTER TABLE public.organizations ADD CONSTRAINT fk_owner_id FOREIGN KEY (owner_id) REFERENCES public.users(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED;
 
-CREATE TABLE public.subscriptions ( id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(), organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, plan_id INT REFERENCES public.plans(id), stripe_subscription_id TEXT, status TEXT, period_end TIMESTAMPTZ, monthly_label_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW() );
+CREATE TABLE public.subscriptions ( id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(), organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, plan_id INT REFERENCES public.plans(id), stripe_subscription_id TEXT, status TEXT, period_end TIMESTAMPTZ, monthly_label_count INT DEFAULT 0, bonus_balance INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW() );
 CREATE TABLE public.stock_items ( id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(), code TEXT NOT NULL, name TEXT NOT NULL, kind public.stock_item_kind NOT NULL, unit public.stock_item_unit NOT NULL, current_qty REAL NOT NULL DEFAULT 0, min_qty REAL NOT NULL DEFAULT 0, category TEXT, color TEXT, composition TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), product_type TEXT, expedition_items JSONB, substitute_product_code TEXT, linked_skus JSONB, organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, UNIQUE(organization_id, code) );
 CREATE TABLE public.stock_movements ( id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(), stock_item_code TEXT NOT NULL, stock_item_name TEXT, origin public.stock_movement_origin NOT NULL, qty_delta REAL NOT NULL, ref TEXT, created_by_name TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, product_sku TEXT );
 CREATE TABLE public.product_boms ( product_sku TEXT NOT NULL, items JSONB NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW(), organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, PRIMARY KEY(organization_id, product_sku) );
@@ -168,6 +168,76 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.increment_label_count_safe(amount INT) 
+RETURNS TABLE(success BOOLEAN, error TEXT, remaining INT)
+LANGUAGE plpgsql 
+SECURITY DEFINER 
+SET search_path = public 
+AS $$
+DECLARE 
+    v_org_id UUID;
+    v_plan_limit INT;
+    v_monthly_count INT;
+    v_bonus INT;
+    v_status TEXT;
+    v_period_end TIMESTAMPTZ;
+    v_trial_duration INTERVAL := '7 days';
+    v_user_created_at TIMESTAMPTZ;
+    v_new_total INT;
+    v_remaining INT;
+BEGIN
+    -- Get user's organization
+    SELECT organization_id INTO v_org_id FROM public.users WHERE id = auth.uid();
+    IF v_org_id IS NULL THEN
+        RETURN QUERY SELECT FALSE, 'Usuário não encontrado.'::TEXT, 0;
+        RETURN;
+    END IF;
+
+    -- Get subscription and plan details
+    SELECT 
+        s.status, 
+        s.period_end, 
+        COALESCE(s.monthly_label_count, 0),
+        COALESCE(s.bonus_balance, 0),
+        COALESCE(p.label_limit, 200)
+    INTO v_status, v_period_end, v_monthly_count, v_bonus, v_plan_limit
+    FROM public.subscriptions s
+    LEFT JOIN public.plans p ON s.plan_id = p.id
+    WHERE s.organization_id = v_org_id;
+
+    -- If no subscription exists, get user created_at for trial check
+    IF v_status IS NULL THEN
+        SELECT created_at INTO v_user_created_at FROM public.users WHERE id = auth.uid();
+        v_period_end := v_user_created_at + v_trial_duration;
+        v_status := 'trialing';
+        v_plan_limit := 200; -- Teste limit
+    END IF;
+
+    -- Check if trial period has expired (for trialing status)
+    IF v_status = 'trialing' AND NOW() > v_period_end THEN
+        RETURN QUERY SELECT FALSE, 'Período de teste expirado. Assine um plano para continuar.'::TEXT, 0;
+        RETURN;
+    END IF;
+
+    -- Calculate new total and check if it exceeds limit
+    v_new_total := v_monthly_count + amount;
+    v_remaining := (v_plan_limit + v_bonus) - v_new_total;
+
+    -- Check quota
+    IF v_new_total > (v_plan_limit + v_bonus) THEN
+        RETURN QUERY SELECT FALSE, 'Cota de etiquetas insuficiente para este mês.'::TEXT, v_remaining;
+        RETURN;
+    END IF;
+
+    -- Increment label count
+    UPDATE public.subscriptions 
+    SET monthly_label_count = v_new_total 
+    WHERE organization_id = v_org_id;
+
+    RETURN QUERY SELECT TRUE, ''::TEXT, v_remaining;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION public.protect_critical_user_columns()
 RETURNS TRIGGER 
 LANGUAGE plpgsql 
@@ -262,13 +332,14 @@ BEGIN
 END; 
 $$;
 
-INSERT INTO public.plans (name, price, max_users, features, stripe_price_id) VALUES
-('Starter', 59.90, 2, '["Etiquetas Ilimitadas", "2 Usuários", "Suporte por E-mail"]'::jsonb, 'price_1ST6WUH9gIP9tzTRDrjI7fPf'),
-('Plus', 99.90, 4, '["Tudo do Starter", "4 Usuários", "Relatórios Avançados", "Suporte Prioritário via Chat"]'::jsonb, 'price_1ST6YRH9gIP9tzTRgGgPv21v'),
-('Escala', 399.90, 8, '["Tudo do plano Plus", "8 Usuários", "Gerente de conta dedicado", "Suporte 24/7"]'::jsonb, 'price_1ST6YiH9gIP9tzTR1VvlqsRl');
+INSERT INTO public.plans (name, price, max_users, features, stripe_price_id, label_limit) VALUES
+('Starter', 59.90, 2, '["800 Etiquetas/mês", "2 Usuários", "Suporte por E-mail"]'::jsonb, 'price_1ST6WUH9gIP9tzTRDrjI7fPf', 800),
+('Plus', 99.90, 4, '["2600 Etiquetas/mês", "4 Usuários", "Relatórios Avançados", "Suporte Prioritário via Chat"]'::jsonb, 'price_1ST6YRH9gIP9tzTRgGgPv21v', 2600),
+('Escala', 399.90, 8, '["Etiquetas Ilimitadas", "8 Usuários", "Gerente de conta dedicado", "Suporte 24/7"]'::jsonb, 'price_1ST6YiH9gIP9tzTR1VvlqsRl', 999999);
 
 GRANT EXECUTE ON FUNCTION public.get_current_org_id TO authenticated;
 GRANT EXECUTE ON FUNCTION public.increment_label_count TO authenticated;
+GRANT EXECUTE ON FUNCTION public.increment_label_count_safe TO authenticated;
 GRANT EXECUTE ON FUNCTION public.handle_new_user TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
 GRANT ALL ON ALL FUNCTIONS IN SCHEMA public TO postgres, anon, authenticated, service_role;

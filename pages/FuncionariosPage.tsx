@@ -101,6 +101,7 @@ const FuncionariosPage: React.FC<FuncionariosPageProps> = ({ users, onSetAttenda
     const [userToDelete, setUserToDelete] = useState<User | null>(null);
     const [isSimpleDeleteModalOpen, setIsSimpleDeleteModalOpen] = useState(false);
     const [isSimpleDeleting, setIsSimpleDeleting] = useState(false);
+    const [isLimitModalOpen, setIsLimitModalOpen] = useState(false);
 
     const userCount = users.length;
     const maxUsers = subscription?.plan?.max_users || 1;
@@ -223,8 +224,7 @@ const FuncionariosPage: React.FC<FuncionariosPageProps> = ({ users, onSetAttenda
                 <button
                     onClick={() => {
                         if (userCount >= maxUsers) {
-                            alert(`Limite de ${maxUsers} usuário(s) do seu plano atual foi atingido. Faça um upgrade para adicionar mais.`);
-                            window.location.hash = 'assinatura';
+                            setIsLimitModalOpen(true);
                         } else {
                             setIsAddFuncionarioModalOpen(true)
                         }
@@ -480,6 +480,38 @@ const FuncionariosPage: React.FC<FuncionariosPageProps> = ({ users, onSetAttenda
                     confirmButtonText="Sim, Excluir"
                     isConfirming={isSimpleDeleting}
                 />
+            )}
+
+            {/* Modal de Limite de Usuários */}
+            {isLimitModalOpen && (
+                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-[var(--color-surface)] rounded-xl shadow-2xl max-w-md p-6 border border-[var(--color-border)]">
+                        <h2 className="text-2xl font-bold text-[var(--color-text-primary)] mb-3">🔒 Limite de Equipe Atingido</h2>
+                        <p className="text-[var(--color-text-secondary)] mb-6">
+                            Seu plano atual suporta <strong>{maxUsers} usuário(s)</strong>, mas você já possui <strong>{userCount} funcionário(s)</strong>.
+                        </p>
+                        <p className="text-[var(--color-text-secondary)] mb-6">
+                            Faça upgrade do seu plano para adicionar mais membros à sua equipe.
+                        </p>
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setIsLimitModalOpen(false)}
+                                className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 font-semibold transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={() => {
+                                    setIsLimitModalOpen(false);
+                                    setTimeout(() => window.location.hash = '#/app/assinatura', 100);
+                                }}
+                                className="flex-1 px-4 py-2 bg-[var(--color-primary)] text-[var(--color-primary-text)] rounded-lg hover:bg-[var(--color-primary-hover)] font-semibold transition-colors"
+                            >
+                                📈 Ver Planos
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );

@@ -48,14 +48,61 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
   const [error, setError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setAvatar(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      const MAX = 512;
+      try {
+        if ('createImageBitmap' in window) {
+          const bitmap = await createImageBitmap(file);
+          let { width, height } = bitmap;
+          let scale = 1;
+          if (width > MAX || height > MAX) {
+            scale = Math.min(MAX / width, MAX / height);
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            setAvatar(dataUrl);
+          }
+        } else {
+          const img = new Image();
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            img.onload = () => {
+              const MAX_LOCAL = 512;
+              let { width, height } = img;
+              if (width > MAX_LOCAL || height > MAX_LOCAL) {
+                const ratio = Math.min(MAX_LOCAL / width, MAX_LOCAL / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+              }
+              const canvas = document.createElement('canvas');
+              canvas.width = width;
+              canvas.height = height;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(img, 0, 0, width, height);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                setAvatar(dataUrl);
+              } else {
+                setAvatar(ev.target?.result as string);
+              }
+            };
+            img.src = ev.target?.result as string;
+          };
+          reader.readAsDataURL(file);
+        }
+      } catch (err) {
+        // fallback: read as dataURL directly
+        const reader = new FileReader();
+        reader.onloadend = (ev) => setAvatar(ev.target?.result as string);
+        reader.readAsDataURL(file);
+      }
     }
   };
 
@@ -88,6 +135,20 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
 
   const planName = subscription?.plan?.name || 'Plano Grátis (Teste)';
   const planStatus = subscription?.status === 'active' ? 'Ativo' : 'Período de Teste';
+
+  React.useEffect(() => {
+    const onVisibility = () => {
+      // Debug: log tab visibility changes to help diagnose freezing
+      // eslint-disable-next-line no-console
+      console.debug('[ProfilePage] visibilitychange:', document.visibilityState);
+      // Re-enable input if necessary
+      if (document.visibilityState === 'visible' && fileInputRef.current) {
+        try { fileInputRef.current.disabled = false; } catch (e) { /* ignore */ }
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -124,7 +185,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user, onUpdateUser, subscript
               className="hidden"
             />
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => { if (fileInputRef.current) fileInputRef.current.value = ''; fileInputRef.current?.click(); }}
               className="absolute -bottom-1 -right-1 p-2 bg-blue-600 text-white rounded-full hover:bg-blue-700 border-2 border-[var(--color-surface)]"
               title="Mudar foto"
             >

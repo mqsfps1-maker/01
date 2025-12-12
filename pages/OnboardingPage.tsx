@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { User } from '../types';
 import { dbClient } from '../lib/supabaseClient';
 import { Loader2, AlertTriangle, Building, Save } from 'lucide-react';
@@ -16,6 +17,7 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ user, onComplete, addTo
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isFetchingCnpj, setIsFetchingCnpj] = useState(false);
+    const navigate = useNavigate();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -30,23 +32,58 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ user, onComplete, addTo
             return;
         }
 
+        if (!organizationName.trim()) {
+            setError('Nome da empresa é obrigatório. Digite manualmente ou aguarde o preenchimento automático.');
+            setIsLoading(false);
+            return;
+        }
+
+        console.log('[ONBOARDING] Enviando dados para servidor:', { cpf_cnpj: cleanValue, organization_name: organizationName });
+
         try {
-            const { error: rpcError } = await dbClient.rpc('complete_new_user_profile', {
-                p_organization_name: organizationName,
+            const { data, error: rpcError } = await dbClient.rpc('complete_new_user_profile', {
                 p_cpf_cnpj: cleanValue,
+                p_organization_name: organizationName,
             });
 
             if (rpcError) {
-                if (rpcError.message.includes('duplicate key value violates unique constraint')) {
-                     throw new Error(`Este CPF/CNPJ já está cadastrado em outra organização.`);
-                }
+                console.error('[ONBOARDING] Erro RPC:', rpcError);
                 throw new Error(`Erro ao finalizar cadastro: ${rpcError.message}`);
             }
+
+            if (data && data.success === false) {
+                console.error('[ONBOARDING] Erro na resposta:', data.error);
+                throw new Error(data.error || 'Erro desconhecido');
+            }
             
-            addToast('Perfil completo! Bem-vindo(a)!', 'success');
-            onComplete();
+            console.log('[ONBOARDING] ✅ Perfil completo com sucesso!', { 
+                org_id: data?.organization_id?.substring(0, 8),
+                user_id: data?.user_id?.substring(0, 8)
+            });
+            
+            addToast('✅ Cadastro realizado com sucesso!', 'success');
+            
+            // Fazer logout explícito
+            console.log('[ONBOARDING] Desconectando usuário...');
+            const { error: signOutError } = await dbClient.auth.signOut();
+            if (signOutError) {
+                console.warn('[ONBOARDING] Erro ao fazer logout:', signOutError);
+            } else {
+                console.log('[ONBOARDING] ✓ Logout bem-sucedido');
+            }
+            
+            // Limpar storage
+            sessionStorage.clear();
+            localStorage.removeItem('sb-auth-token');
+            
+            // Redirecionar para login
+            console.log('[ONBOARDING] Redirecionando para login...');
+            setTimeout(() => {
+                navigate('/login', { replace: true });
+            }, 800);
 
         } catch (err: any) {
+            console.error('[ONBOARDING] Erro ao completar perfil:', err);
             setError(err.message || 'Ocorreu um erro desconhecido.');
         } finally {
             setIsLoading(false);
@@ -78,21 +115,32 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ user, onComplete, addTo
     const fetchCnpjData = async () => {
         const cleanValue = cpfCnpj.replace(/[^\d]/g, '');
         if (cleanValue.length !== 14 || !isValidCNPJ(cleanValue)) {
+            console.log('[ONBOARDING] CNPJ inválido ou incompleto:', cleanValue);
             return;
         }
 
+        console.log('[ONBOARDING] Buscando dados do CNPJ:', cleanValue);
         setIsFetchingCnpj(true);
         setError('');
         try {
             const response = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cleanValue}`);
+            console.log('[ONBOARDING] Resposta da API:', response.status);
+            
             if (response.ok) {
                 const data = await response.json();
+                console.log('[ONBOARDING] Dados recebidos:', data);
+                
                 if (data && data.razao_social) {
+                    console.log('[ONBOARDING] Auto-preenchendo empresa:', data.razao_social);
                     setOrganizationName(data.razao_social);
+                } else {
+                    console.warn('[ONBOARDING] Nenhuma razão social encontrada nos dados');
                 }
+            } else {
+                console.warn('[ONBOARDING] Erro na resposta da API:', response.status);
             }
         } catch (fetchError) {
-            console.error("Failed to fetch CNPJ data:", fetchError);
+            console.error("[ONBOARDING] Erro ao buscar CNPJ:", fetchError);
             // Don't show an error to the user, they can still type manually
         } finally {
             setIsFetchingCnpj(false);
@@ -116,19 +164,6 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ user, onComplete, addTo
 
                 <form className="space-y-6" onSubmit={handleSubmit}>
                     <div>
-                        <label htmlFor="organizationName" className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2"><Building size={16}/> Nome da Empresa</label>
-                        <input
-                            id="organizationName"
-                            type="text"
-                            value={organizationName}
-                            onChange={(e) => setOrganizationName(e.target.value)}
-                            className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
-                            placeholder="Sua Empresa Ltda."
-                            required
-                        />
-                    </div>
-                    
-                    <div>
                         <label htmlFor="cpfCnpj" className="block text-sm font-medium text-slate-300 mb-1">CPF ou CNPJ</label>
                          <div className="relative">
                             <input
@@ -146,6 +181,19 @@ const OnboardingPage: React.FC<OnboardingPageProps> = ({ user, onComplete, addTo
                                 <Loader2 className="animate-spin h-5 w-5 text-slate-300 absolute right-3 top-1/2 -translate-y-1/2" />
                             )}
                         </div>
+                    </div>
+                    
+                    <div>
+                        <label htmlFor="organizationName" className="block text-sm font-medium text-slate-300 mb-1 flex items-center gap-2"><Building size={16}/> Nome da Empresa</label>
+                        <input
+                            id="organizationName"
+                            type="text"
+                            value={organizationName}
+                            onChange={(e) => setOrganizationName(e.target.value)}
+                            className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
+                            placeholder="Sua Empresa Ltda."
+                            required
+                        />
                     </div>
                     
                     {error && (

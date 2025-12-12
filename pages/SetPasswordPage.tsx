@@ -65,11 +65,14 @@ const SetPasswordPage: React.FC<SetPasswordPageProps> = ({ user, onComplete, onI
             console.error('Erro ao deslogar após definir senha:', signOutErr);
         }
 
-        if (user.organization_id) {
-            onInviteComplete();
-        } else {
-            onComplete();
-        }
+        // Aguarda logout completar e redireciona
+        setTimeout(() => {
+            if (user.organization_id) {
+                onInviteComplete();
+            } else {
+                onComplete();
+            }
+        }, 200);
     };
 
     return (

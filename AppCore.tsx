@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { dbClient } from './lib/supabaseClient';
@@ -72,6 +72,7 @@ interface AppCoreProps {
 const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     const [isLoading, setIsLoading] = useState(true); // Initial load only
     const [isRefreshing, setIsRefreshing] = useState(false); // Background refresh
+    const hasLoadedOnceRef = useRef(false);
     
     const [subscription, setSubscription] = useState<Subscription | null>(null);
     const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
@@ -209,6 +210,8 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
             } finally {
                 if(!isBackground) setIsLoading(false);
                 if(isBackground) setIsRefreshing(false);
+                // Mark that initial load happened at least once
+                hasLoadedOnceRef.current = true;
             }
     }, [addToast]);
 
@@ -418,7 +421,7 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         }
     };
     
-    if (isLoading) {
+    if (isLoading && !hasLoadedOnceRef.current) {
         return <div className="flex h-screen w-full items-center justify-center bg-[var(--color-bg)]"><Loader2 size={48} className="animate-spin text-[var(--color-primary)]"/></div>;
     }
     
@@ -431,6 +434,14 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     
     return (
         <div className="flex h-screen bg-[var(--color-bg)]">
+            {/* If we are loading in background after first load, show a subtle overlay spinner instead of blank screen */}
+            {isLoading && hasLoadedOnceRef.current && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+                    <div className="bg-black bg-opacity-30 p-4 rounded-md">
+                        <Loader2 size={40} className="animate-spin text-white"/>
+                    </div>
+                </div>
+            )}
             <Sidebar 
                 isCollapsed={isSidebarCollapsed} 
                 setIsCollapsed={setIsSidebarCollapsed} 

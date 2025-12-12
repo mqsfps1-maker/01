@@ -655,7 +655,15 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
 
             const pdfBlob = await buildPdf(newPreviews, newProcessed, settings, includeDanfe, stockItems, skuLinks);
             const url = URL.createObjectURL(pdfBlob);
-            window.open(url, '_blank');
+            // Use an anchor click to trigger download (more reliable than window.open for async flows)
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `etiquetas_${Date.now()}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            // release object URL shortly after
+            setTimeout(() => URL.revokeObjectURL(url), 20000);
 
             // Mark printed indices (best-effort: mark all label indices present in newPreviews)
             const indicesToMark = new Set<number>();

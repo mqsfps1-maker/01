@@ -440,6 +440,45 @@ BEGIN
 END;
 $$;
 
+-- Função para completar perfil de novo usuário
+CREATE OR REPLACE FUNCTION public.complete_new_user_profile(p_cpf_cnpj TEXT, p_organization_name TEXT)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE v_user_id UUID := auth.uid(); v_organization_id UUID;
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.users WHERE id = v_user_id AND organization_id IS NOT NULL) THEN
+        RAISE EXCEPTION 'User profile is already complete.';
+    END IF;
+    INSERT INTO public.organizations (name, cpf_cnpj) VALUES (p_organization_name, p_cpf_cnpj) RETURNING id INTO v_organization_id;
+    UPDATE public.users SET organization_id = v_organization_id, cpf_cnpj = p_cpf_cnpj, has_set_password = TRUE WHERE id = v_user_id;
+    UPDATE public.organizations SET owner_id = v_user_id WHERE id = v_organization_id;
+END;
+$$;
+  WHERE s.organization_id = v_org_id;
+
+  IF v_current_count IS NULL THEN
+    v_current_count := 0;
+    v_bonus_balance := 0;
+    v_plan_limit := 200;
+  END IF;
+
+  v_new_count := v_current_count + amount;
+
+  IF v_plan_limit > 0 AND (v_new_count > v_plan_limit + v_bonus_balance) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'Cota de etiquetas insuficiente');
+  END IF;
+
+  UPDATE public.subscriptions
+  SET monthly_label_count = v_new_count
+  WHERE organization_id = v_org_id;
+
+  RETURN jsonb_build_object('success', true, 'new_count', v_new_count);
+END;
+$$;
+
 -- ============================================================================
 -- 6. DADOS INICIAIS - PLANOS
 -- ============================================================================
@@ -456,17 +495,18 @@ ON CONFLICT (name) DO NOTHING;
 -- 7. ROW LEVEL SECURITY (RLS) - SEGURANÇA MULTI-TENANT
 -- ============================================================================
 
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.stock_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.scan_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.import_history ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.etiquetas_historico ENABLE ROW LEVEL SECURITY;
+-- PASSO 1: Desabilitar RLS temporariamente para limpar policies
+ALTER TABLE public.users DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.orders DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_items DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scan_logs DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.app_settings DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.import_history DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.etiquetas_historico DISABLE ROW LEVEL SECURITY;
 
--- Drop policies antigas (se existirem) para evitar duplicatas
+-- PASSO 2: Drop policies antigas (se existirem) para evitar duplicatas
 DROP POLICY IF EXISTS "Usuários podem ver seu próprio perfil" ON public.users;
 DROP POLICY IF EXISTS "Usuários podem atualizar seu próprio perfil" ON public.users;
 DROP POLICY IF EXISTS "Usuários podem ver pedidos da sua organização" ON public.orders;
@@ -493,6 +533,8 @@ DROP POLICY IF EXISTS "Usuários podem ver histórico de importações da sua or
 DROP POLICY IF EXISTS "Usuários podem inserir histórico na sua organização" ON public.import_history;
 DROP POLICY IF EXISTS "Usuários podem ver histórico de etiquetas da sua organização" ON public.etiquetas_historico;
 DROP POLICY IF EXISTS "Usuários podem inserir histórico de etiquetas na sua organização" ON public.etiquetas_historico;
+
+-- PASSO 3: Criar todas as policies ANTES de reabilitar RLS
 
 -- Policies para users
 CREATE POLICY "Usuários podem ver seu próprio perfil"
@@ -606,6 +648,17 @@ USING (organization_id = public.get_current_org_id());
 CREATE POLICY "Usuários podem inserir histórico de etiquetas na sua organização"
 ON public.etiquetas_historico FOR INSERT
 WITH CHECK (organization_id = public.get_current_org_id());
+
+-- PASSO 4: AGORA reabilitar RLS com todas as policies em lugar
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.scan_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.import_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.etiquetas_historico ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================================
 -- FIM DO SETUP - BANCO PRONTO PARA USO

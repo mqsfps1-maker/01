@@ -39,7 +39,8 @@ const SubscriptionPage: React.FC<SubscriptionPageProps> = ({ user, subscription,
 
     useEffect(() => {
         const fetchPlans = async () => {
-            const { data, error } = await dbClient.from('plans').select('*').order('price');
+            // Only fetch active plans (RLS may block otherwise)
+            const { data, error } = await dbClient.from('plans').select('*').eq('active', true).order('price');
             if (error) {
                 addToast('Erro ao carregar os planos.', 'error');
             } else {

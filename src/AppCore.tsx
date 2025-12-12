@@ -690,6 +690,55 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         };
 
         try {
+            // 1) Persist customers
+            try {
+                const customersPayload: any[] = [];
+                if (data?.lists?.completa && Array.isArray(data.lists.completa)) {
+                    const seen = new Set<string>();
+                    for (const o of data.lists.completa) {
+                        const cpf = (o as any).customer_cpf_cnpj || (o as any).customerCpfCnpj || null;
+                        const name = (o as any).customer_name || (o as any).customerName || null;
+                        if (cpf && !seen.has(cpf)) {
+                            seen.add(cpf);
+                            customersPayload.push({ cpf_cnpj: cpf, name: name || cpf, organization_id: user.organization_id });
+                        }
+                    }
+                }
+                if (customersPayload.length > 0) {
+                    const { error: custErr } = await dbClient.from('customers').upsert(customersPayload, { onConflict: 'organization_id,cpf_cnpj' });
+                    if (custErr) console.warn('Failed to upsert customers during import:', custErr);
+                }
+            } catch (custErr) {
+                console.error('Error persisting customers during import:', custErr);
+            }
+
+            // 2) Persist orders
+            try {
+                if (data?.lists?.completa && Array.isArray(data.lists.completa) && data.lists.completa.length > 0) {
+                    const ordersPayload = data.lists.completa.map((o: any) => ({
+                        order_id: o.orderId || o.order_id,
+                        tracking: o.tracking || null,
+                        sku: o.sku,
+                        quantity: o.qty_original || o.quantity || 1,
+                        qty_original: o.qty_original || o.quantity || 1,
+                        multiplicador: o.multiplicador || 1,
+                        qty_final: o.qty_final || ((o.qty_original || o.quantity || 1) * (o.multiplicador || 1)),
+                        color: o.color || null,
+                        canal: data.canal || null,
+                        data: o.data || null,
+                        status: o.status || null,
+                        customer_name: o.customer_name || null,
+                        customer_cpf_cnpj: o.customer_cpf_cnpj || null,
+                        organization_id: user.organization_id
+                    }));
+                    const { error: ordersErr } = await dbClient.from('orders').upsert(ordersPayload, { onConflict: 'organization_id,order_id,sku' });
+                    if (ordersErr) console.warn('Failed to upsert orders during import:', ordersErr);
+                }
+            } catch (ordersErr) {
+                console.error('Error persisting orders during import:', ordersErr);
+            }
+
+            // 3) Insert import_history
             const { data: resData, error } = await dbClient.from('import_history').insert(payload).select().single();
             if (error) {
                 console.error('Failed to insert import_history:', JSON.stringify(error, null, 2));
@@ -707,23 +756,46 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     const handleSaveEtiquetaHistory = async (item: Omit<EtiquetaHistoryItem, 'id' | 'created_at'>) => {
         if (!user?.organization_id) return null;
         try {
-            const { data: histId, error } = await dbClient.rpc('save_etiqueta_history', {
-                p_created_by_name: (item as any).created_by_name || user.name,
-                p_page_count: (item as any).page_count || 0,
-                p_zpl_content: (item as any).zpl_content || '',
-                p_settings_snapshot: (item as any).settings_snapshot || {},
-                p_page_hashes: (item as any).page_hashes || []
-            });
-            if (error) {
-                console.error('Failed to save etiqueta history:', error);
-                throw new Error(error.message || 'Erro ao salvar histórico de etiquetas');
+            // Try RPC first (may not exist). If RPC missing or fails, fallback to direct insert.
+            let inserted: any = null;
+            try {
+                const { data: histId, error } = await dbClient.rpc('save_etiqueta_history', {
+                    p_created_by_name: (item as any).created_by_name || user.name,
+                    p_page_count: (item as any).page_count || 0,
+                    p_zpl_content: (item as any).zpl_content || '',
+                    p_settings_snapshot: (item as any).settings_snapshot || {},
+                    p_page_hashes: (item as any).page_hashes || []
+                });
+                if (!error && histId) {
+                    const { data: updated } = await dbClient.from('etiquetas_historico').select('*').eq('id', histId).single();
+                    if (updated) inserted = updated;
+                } else {
+                    console.warn('RPC save_etiqueta_history unavailable or returned no id, falling back to insert', error);
+                }
+            } catch (rpcErr) {
+                console.warn('RPC call failed (likely missing):', rpcErr);
             }
-            // fetch updated history from server
-            const { data: updated } = await dbClient.from('etiquetas_historico').select('*').eq('id', histId).single();
-            if (updated) {
-                setEtiquetasHistory(prev => [updated, ...prev]);
+
+            if (!inserted) {
+                // direct insert fallback
+                const payload = {
+                    created_by_name: (item as any).created_by_name || user.name,
+                    page_count: (item as any).page_count || 0,
+                    zpl_content: (item as any).zpl_content || '',
+                    settings_snapshot: (item as any).settings_snapshot || {},
+                    page_hashes: (item as any).page_hashes || [],
+                    organization_id: user.organization_id
+                };
+                const { data: resData, error: insertErr } = await dbClient.from('etiquetas_historico').insert(payload).select().single();
+                if (insertErr) {
+                    console.error('Failed to insert etiqueta history fallback:', insertErr);
+                    throw new Error(insertErr.message || 'Erro ao salvar histórico de etiquetas');
+                }
+                inserted = resData;
             }
-            return updated;
+
+            if (inserted) setEtiquetasHistory(prev => [inserted, ...prev]);
+            return inserted;
         } catch (err: any) {
             console.error('handleSaveEtiquetaHistory error:', err);
             throw err;

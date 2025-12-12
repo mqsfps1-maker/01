@@ -64,7 +64,10 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateToLogin, addToast
                     <CheckCircle size={48} className="mx-auto text-emerald-400" />
                     <h1 className="text-3xl font-bold text-white">Cadastro Enviado!</h1>
                     <p className="text-slate-300">
-                        Enviamos um link de confirmação para o seu e-mail. Por favor, verifique sua caixa de entrada (e a pasta de spam) para ativar sua conta antes de fazer o login.
+                        Enviamos um link de confirmação para o seu e-mail. Por favor, verifique sua caixa de entrada (e a pasta de spam) para ativar sua conta.
+                    </p>
+                    <p className="text-slate-400 text-sm">
+                        ℹ️ Após confirmar seu e-mail, você poderá fazer login e criar sua organização no dashboard.
                     </p>
                     <button onClick={onNavigateToLogin} className="w-full flex justify-center py-3 px-4 border border-transparent text-sm font-semibold rounded-lg text-white bg-blue-600 hover:bg-blue-700">
                         Ir para Login

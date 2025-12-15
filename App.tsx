@@ -105,7 +105,6 @@ const App: React.FC = () => {
 
     // Função para limpar dados quando fazer logout
     const clearAllData = () => {
-        console.log('[CLEANUP] Limpando todos os dados...');
         setUser(null);
         currentUserIdRef.current = null;
         sessionStorage.clear();
@@ -130,21 +129,15 @@ const App: React.FC = () => {
 
     const fetchUserProfile = async (userId: string): Promise<User | null> => {
         try {
-            console.log(`[AUTH] Tentando buscar perfil para usuário: ${userId}`);
             const { data, error } = await dbClient.from('users').select('*').eq('id', userId).single();
             
             if (data) {
-                console.log('[AUTH] ✓ Perfil encontrado com sucesso', { org_id: data.organization_id, email: data.email });
                 return data as User;
             }
             
             if (error) {
-                console.warn(`[AUTH] Erro ao buscar perfil:`, error.code, error.message);
-                
                 // Se for erro PGRST116 (não encontrado) ou 403 (RLS)
                 if (error.code === 'PGRST116' || error.code === 'PGRST0' || error.message.includes('permission denied') || error.message.includes('No rows found')) {
-                    console.log('[AUTH] Usuário não encontrado na tabela users, criando...');
-                    
                     const { data: authUser } = await dbClient.auth.getUser();
                     if (authUser?.user) {
                         const newProfile: User = {
@@ -165,7 +158,6 @@ const App: React.FC = () => {
                             created_at: new Date().toISOString(),
                         };
                         
-                        console.log('[AUTH] Criando novo perfil de fallback:', { id: userId, email: authUser.user.email });
                         return newProfile;
                     }
                 }
@@ -173,18 +165,15 @@ const App: React.FC = () => {
             
             return null;
         } catch (err: any) {
-            console.error('[AUTH] Erro ao processar perfil:', err.message);
             return null;
         }
     };
     
     const createUserProfile = async (userId: string): Promise<void> => {
         try {
-            console.log(`[AUTH] Salvando perfil do usuário ${userId} no banco...`);
             const { data: authUser } = await dbClient.auth.getUser();
             
             if (!authUser?.user) {
-                console.error('[AUTH] Não conseguiu obter dados de autenticação');
                 return;
             }
             
@@ -208,15 +197,15 @@ const App: React.FC = () => {
             const { error } = await dbClient.from('users').upsert(profileData, {
                 onConflict: 'id'
             });
-            
-            if (error) {
-                console.warn('[AUTH] Não foi possível salvar perfil, mas continuando...', error.message);
-            } else {
-                console.log('[AUTH] ✓ Perfil salvo com sucesso');
-            }
+            // Continuar independentemente se salvou ou não
         } catch (err: any) {
-            console.warn('[AUTH] Erro ao criar perfil, mas continuando...', err.message);
+            // Continuar mesmo se houver erro
         }
+    };
+
+    const createAutoOrganization = async (userId: string): Promise<string | null> => {
+        // Não cria mais automaticamente
+        return null;
     };
 
     useEffect(() => {
@@ -226,47 +215,39 @@ const App: React.FC = () => {
         const { data: { subscription } } = dbClient.auth.onAuthStateChange(async (event, session) => {
             if (!mounted) return;
             
-            console.log(`[AUTH] Evento: ${event}`);
-            
             if (event === 'SIGNED_OUT') {
-                console.log('[AUTH] ✓ Usuário desconectado');
                 clearAllData();
                 setIsLoading(false);
                 // Redirecionar para landing após logout
                 if (mounted) {
-                    setTimeout(() => navigate('/', { replace: true }), 100);
+                    navigate('/', { replace: true });
                 }
             } else if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION')) {
-                console.log(`[AUTH] Processando: ${event}`);
-                setIsLoading(true);
+                // Apenas para TOKEN_REFRESHED e INITIAL_SESSION, não setIsLoading(true)
+                // Isso evita telas de carregamento inúteis
+                if (event !== 'TOKEN_REFRESHED') {
+                    setIsLoading(true);
+                }
                 
                 try {
                     const profile = await fetchUserProfile(session.user.id);
                     if (mounted) {
                         if (profile) {
-                            console.log('[AUTH] ✓ Perfil carregado', { 
-                                id: profile.id?.substring(0, 8), 
-                                org_id: profile.organization_id?.substring(0, 8),
-                                email: profile.email 
-                            });
+                            // Se usuário não tem organização, NÃO criar automaticamente
+                            // Deixar que o dashboard mostre o modal
+                            
                             setUser(profile);
                             currentUserIdRef.current = profile.id;
                             setErrorState({ isError: false, message: '' });
                             
                             // Redirecionar automaticamente após login bem-sucedido
                             if (event === 'SIGNED_IN') {
-                                console.log('[AUTH] Login bem-sucedido, redirecionando...');
                                 if (redirectTimeout) clearTimeout(redirectTimeout);
-                                redirectTimeout = setTimeout(() => {
-                                    if (!mounted) return;
-                                    // Ao fazer login, SEMPRE vai para dashboard
-                                    // O dashboard vai pedir para criar organização se não tiver
-                                    console.log('[AUTH] → Redirecionando para Dashboard');
-                                    navigate('/app/dashboard', { replace: true });
-                                }, 200);
+                                // Sempre vai para dashboard (que vai mostrar modal se sem org)
+                                navigate('/app/dashboard', { replace: true });
                             }
                         } else {
-                            console.warn('[AUTH] Perfil não encontrado no banco');
+                            // Perfil temporário
                             const tempProfile = {
                                 id: session.user.id,
                                 name: session.user.email?.split('@')[0] || 'Usuário',
@@ -284,36 +265,36 @@ const App: React.FC = () => {
                                 has_set_password: false,
                                 created_at: new Date().toISOString(),
                             } as User;
+                            
                             setUser(tempProfile);
                             currentUserIdRef.current = tempProfile.id;
                             
-                            // Redirecionar após login com perfil temporário
+                            // Redirecionar para dashboard (que mostrará modal de criar org)
                             if (event === 'SIGNED_IN') {
-                                console.log('[AUTH] → Onboarding (primeiro acesso)');
-                                setTimeout(() => {
-                                    navigate('/onboarding', { replace: true });
-                                }, 100);
+                                navigate('/app/dashboard', { replace: true });
                             }
                         }
+                        // Criar perfil em background (não bloqueia)
                         await createUserProfile(session.user.id);
                     }
                 } catch (err: any) {
-                    console.error('[AUTH] Erro ao processar sessão:', err.message);
                     if (mounted) {
                         setUser(null);
                         currentUserIdRef.current = null;
                     }
                 } finally {
-                    if (mounted) setIsLoading(false);
+                    if (mounted && event !== 'TOKEN_REFRESHED') {
+                        setIsLoading(false);
+                    }
                 }
             } else {
-                console.log('[AUTH] Sem sessão ativa ou evento ignorado');
-                if (mounted) setIsLoading(false);
+                if (mounted) {
+                    setIsLoading(false);
+                }
             }
         });
 
         return () => {
-            console.log('[CLEANUP] Desmontando listener de auth');
             mounted = false;
             if (redirectTimeout) clearTimeout(redirectTimeout);
             subscription?.unsubscribe();
@@ -330,11 +311,6 @@ const App: React.FC = () => {
 
     if (errorState.isError) {
         return <ProfileErrorScreen message={errorState.message} onRetry={() => window.location.reload()} onSignOut={handleEmergencySignOut} />;
-    }
-
-    // Sem loader - deixa o app carregar sem mostrar nada
-    if (isLoading) {
-        return null;
     }
 
     return (

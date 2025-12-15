@@ -5,6 +5,7 @@ import { Search, ArrowUp, ArrowDown, CheckCheck, ChevronDown, ChevronRight, Tras
 import ConfirmActionModal from '../components/ConfirmActionModal';
 import Pagination from '../components/Pagination';
 import { dbClient } from '../lib/supabaseClient';
+import { clearAllCache } from '../lib/dataCache';
 
 interface PedidosPageProps {
     allOrders: OrderItem[];
@@ -60,6 +61,9 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
 
     // Carregar preferências do Banco de Dados
     useEffect(() => {
+        // Limpar cache ao entrar na página de vendas para garantir dados frescos
+        clearAllCache();
+        
         const loadPreferences = async () => {
             if (!currentUser?.organization_id) return;
             try {
@@ -77,7 +81,7 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
                     if (prefs.sortConfig) setSortConfig(prefs.sortConfig);
                 }
             } catch (error) {
-                console.error("Erro ao carregar preferências de pedidos:", error);
+                // Cache miss ou erro, continua com defaults
             } finally {
                 setArePrefsLoaded(true);
             }
@@ -106,7 +110,7 @@ const PedidosPage: React.FC<PedidosPageProps> = ({ allOrders, scanHistory, setAl
                         value: payload
                     });
                 } catch (error) {
-                    console.error("Erro ao salvar preferências:", error);
+                    // Erro ao salvar preferências, continua de qualquer forma
                 }
             }, 1000);
         };

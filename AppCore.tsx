@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { dbClient } from './lib/supabaseClient';
+import { getCacheData, setCacheData, clearCache } from './lib/dataCache';
 import { resolveScan } from './lib/scanner';
 import { 
     User, ZplSettings, StockItem, StockMovement, OrderItem, EtiquetaHistoryItem, ScanLogItem, 
@@ -131,9 +132,12 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
          if(isBackground) setIsRefreshing(true);
 
          try {
-                const [subRes, settingsRes] = await Promise.all([
+                // === FASE 1: Carregar dados críticos apenas ===
+                const [subRes, settingsRes, stockRes, ordersRes] = await Promise.all([
                     dbClient.from('subscriptions').select('*, plan:plans(*)').eq('organization_id', loggedInUser.organization_id).in('status', ['trialing', 'active']).maybeSingle(),
-                    dbClient.from('app_settings').select('*').eq('organization_id', loggedInUser.organization_id)
+                    dbClient.from('app_settings').select('key, value').eq('organization_id', loggedInUser.organization_id),
+                    dbClient.from('stock_items').select('*').eq('organization_id', loggedInUser.organization_id).limit(500),
+                    dbClient.from('orders').select('*').eq('organization_id', loggedInUser.organization_id).order('data', { ascending: false }).limit(1000)
                 ]);
 
                 const subData = subRes.data;
@@ -160,50 +164,71 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 const planning = appSettings.find(s => s.key === 'planning_settings');
                 if (planning) _setPlanningSettings(prev => ({...prev, ...planning.value}));
 
-                const results = await Promise.all([
-                    dbClient.from('stock_items').select('*'),
-                    dbClient.from('stock_movements').select('*'),
-                    dbClient.from('orders').select('*'),
-                    dbClient.from('etiquetas_historico').select('*'),
-                    dbClient.from('scan_logs').select('*'),
-                    dbClient.from('import_history').select('*'),
-                    dbClient.from('product_boms').select('*'),
-                    dbClient.from('customers').select('*'),
-                    dbClient.from('production_plans').select('*'),
-                    dbClient.from('shopping_list_items').select('*'),
-                    dbClient.from('users').select('*'),
-                    dbClient.from('sku_links').select('*')
-                ]);
+                // Setar dados críticos IMEDIATAMENTE
+                setStockItems(stockRes.data || []);
+                setAllOrders((ordersRes.data || []).map((o: any) => ({ ...o, orderId: o.order_id, customer_name: o.customer_name, customer_cpf_cnpj: o.customer_cpf_cnpj })));
+                setSubscription(subData || defaultSubscription);
 
-                const [
-                    stockItemsRes, stockMovementsRes, allOrdersRes, etiquetasHistoryRes, scanHistoryRes,
-                    importHistoryRes, produtosCombinadosRes, customersRes, productionPlansRes,
-                    shoppingListRes, usersRes, skuLinksRes
-                ] = results;
+                // Cache de dados críticos
+                setCacheData('stock_items', stockRes.data || []);
+                setCacheData('orders', ordersRes.data || []);
 
-                setStockItems(stockItemsRes.data || []);
-                setStockMovements((stockMovementsRes.data || []).map((m: any) => ({ ...m, createdAt: new Date(m.created_at) })));
-                setAllOrders((allOrdersRes.data || []).map((o: any) => ({ ...o, orderId: o.order_id, customer_name: o.customer_name, customer_cpf_cnpj: o.customer_cpf_cnpj })));
-                setEtiquetasHistory(etiquetasHistoryRes.data || []);
-                setScanHistory((scanHistoryRes.data || []).map((s: any) => ({...s, time: new Date(s.scanned_at), user: s.user_name, displayKey: s.display_key})));
-                setImportHistory(importHistoryRes.data || []);
-                setProdutosCombinados((produtosCombinadosRes.data || []).map((p: any) => ({productSku: p.product_sku, items: p.items})));
-                setCustomers((customersRes.data || []).map((c: any) => ({...c, cpfCnpj: c.cpf_cnpj, orderHistory: c.order_history})));
-                setProductionPlans(productionPlansRes.data || []);
-                setShoppingList((shoppingListRes.data || []).map((i: any) => ({...i, id: i.stock_item_code})));
-                setUsers(usersRes.data || []);
-                setSkuLinks((skuLinksRes.data || []).map((l: any) => ({importedSku: l.imported_sku, masterProductSku: l.master_product_sku})));
-                
+                // === FASE 2: Carregar dados secundários em background (SEM BLOQUEAR UI) ===
+                // Usar setTimeout para não bloquear renderização
+                setTimeout(async () => {
+                    try {
+                        const results = await Promise.all([
+                            dbClient.from('stock_movements').select('*').eq('organization_id', loggedInUser.organization_id).limit(500),
+                            dbClient.from('etiquetas_historico').select('*').eq('organization_id', loggedInUser.organization_id).order('created_at', { ascending: false }).limit(100),
+                            dbClient.from('scan_logs').select('*').eq('organization_id', loggedInUser.organization_id).order('scanned_at', { ascending: false }).limit(500),
+                            dbClient.from('import_history').select('*').eq('organization_id', loggedInUser.organization_id).order('processed_at', { ascending: false }).limit(50),
+                            dbClient.from('product_boms').select('*').eq('organization_id', loggedInUser.organization_id),
+                            dbClient.from('customers').select('*').eq('organization_id', loggedInUser.organization_id).limit(500),
+                            dbClient.from('production_plans').select('*').eq('organization_id', loggedInUser.organization_id),
+                            dbClient.from('shopping_list_items').select('*').eq('organization_id', loggedInUser.organization_id),
+                            dbClient.from('users').select('*').eq('organization_id', loggedInUser.organization_id),
+                            dbClient.from('sku_links').select('*').eq('organization_id', loggedInUser.organization_id)
+                        ]);
+
+                        const [stockMovementsRes, etiquetasHistoryRes, scanHistoryRes, importHistoryRes, produtosCombinadosRes, customersRes, productionPlansRes, shoppingListRes, usersRes, skuLinksRes] = results;
+
+                        setStockMovements((stockMovementsRes.data || []).map((m: any) => ({ ...m, createdAt: new Date(m.created_at) })));
+                        setEtiquetasHistory(etiquetasHistoryRes.data || []);
+                        setScanHistory((scanHistoryRes.data || []).map((s: any) => ({...s, time: new Date(s.scanned_at), user: s.user_name, displayKey: s.display_key})));
+                        setImportHistory(importHistoryRes.data || []);
+                        setProdutosCombinados((produtosCombinadosRes.data || []).map((p: any) => ({productSku: p.product_sku, items: p.items})));
+                        setCustomers((customersRes.data || []).map((c: any) => ({...c, cpfCnpj: c.cpf_cnpj, orderHistory: c.order_history})));
+                        setProductionPlans(productionPlansRes.data || []);
+                        setShoppingList((shoppingListRes.data || []).map((i: any) => ({...i, id: i.stock_item_code})));
+                        setUsers(usersRes.data || []);
+                        setSkuLinks((skuLinksRes.data || []).map((l: any) => ({importedSku: l.imported_sku, masterProductSku: l.master_product_sku})));
+
+                        // Cache dados secundários
+                        setCacheData('stock_movements', stockMovementsRes.data || []);
+                        setCacheData('etiquetas_history', etiquetasHistoryRes.data || []);
+                        setCacheData('scan_history', scanHistoryRes.data || []);
+                    } catch (err) {
+                        console.error('[FetchAllData] Erro ao carregar dados secundários:', err);
+                    }
+                }, 100); // Pequeno delay para deixar UI renderizar primeiro
+
+                // === FASE 3: Carregar dados de admin (se necessário) ===
                 if (loggedInUser.role === 'DONO_SAAS') {
-                    const [orgsRes, plansRes, subsRes] = await Promise.all([
-                        dbClient.from('organizations').select('*'),
-                        dbClient.from('plans').select('*'),
-                        dbClient.from('subscriptions').select('*'),
-                    ]);
+                    setTimeout(async () => {
+                        try {
+                            const [orgsRes, plansRes, subsRes] = await Promise.all([
+                                dbClient.from('organizations').select('*'),
+                                dbClient.from('plans').select('*'),
+                                dbClient.from('subscriptions').select('*'),
+                            ]);
 
-                    setOrganizations(orgsRes.data || []);
-                    setPlans(plansRes.data || []);
-                    setAllSubscriptions(subsRes.data || []);
+                            setOrganizations(orgsRes.data || []);
+                            setPlans(plansRes.data || []);
+                            setAllSubscriptions(subsRes.data || []);
+                        } catch (err) {
+                            console.error('[FetchAllData] Erro ao carregar dados de admin:', err);
+                        }
+                    }, 500);
                 }
             } catch (error) {
                 console.error("Error fetching data:", error);
@@ -281,12 +306,41 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     };
   
     const onSaveStockItem = async (itemData: StockItem): Promise<StockItem | null> => {
-        if (!user?.organization_id) return null;
+        if (!user?.organization_id) {
+            addToast('Usuário sem organização', 'error');
+            return null;
+        }
         const isNew = !itemData.id;
         const payload = { ...itemData, id: isNew ? undefined : itemData.id, organization_id: user.organization_id };
-        const { data, error } = await dbClient.from('stock_items').upsert(payload).select().single();
-        if (error) return null;
-        return data;
+        console.log('[STOCK] Salvando produto:', payload);
+        
+        try {
+            const { data, error } = await dbClient.from('stock_items').upsert(payload).select().single();
+            if (error) {
+                console.error('[STOCK] Erro ao salvar:', error);
+                addToast(`Erro ao salvar produto: ${error.message}`, 'error');
+                return null;
+            }
+            
+            // Atualizar estado IMEDIATAMENTE (otimistic update)
+            setStockItems(prev => {
+                const exists = prev.find(s => s.id === data.id);
+                if (exists) {
+                    return prev.map(s => s.id === data.id ? data : s);
+                }
+                return [...prev, data];
+            });
+
+            // Atualizar cache
+            setCacheData('stock_items', stockItems.map(s => s.id === data.id ? data : s));
+            
+            addToast('Produto salvo com sucesso', 'success');
+            return data;
+        } catch (err: any) {
+            console.error('[STOCK] Exceção ao salvar:', err);
+            addToast(`Erro: ${err.message}`, 'error');
+            return null;
+        }
     };
   
     const handleSaveProdutoCombinado = async (productSku: string, newBomItems: ProdutoCombinado['items']) => {

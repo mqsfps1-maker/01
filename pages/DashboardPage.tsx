@@ -7,6 +7,7 @@ import { OrderItem, ScanLogItem, StockItem, GeneralSettings, Page, ImportHistory
 import OrderListModal from '../components/OrderListModal';
 import InfoListModal from '../components/InfoListModal';
 import ConfigureLowStockModal from '../components/ConfigureLowStockModal';
+import CreateOrganizationModal from '../components/CreateOrganizationModal';
 import ActionCard from '../components/ActionCard';
 
 interface DashboardPageProps {
@@ -18,8 +19,7 @@ interface DashboardPageProps {
     onBulkUpdateStockItems: (updates: { id: string, min_qty: number }[]) => void;
     subscription?: any;
     // Nova prop para atualizar dados sem recarregar
-    onRefresh?: () => Promise<void>;
-}
+    onRefresh?: () => Promise<void>;    user?: any;}
 
 const StatCard: React.FC<{ title: string; value: string; change?: string; icon: React.ReactNode; onClick?: () => void }> = ({ title, value, change, icon, onClick }) => (
     <div 
@@ -127,9 +127,10 @@ const MultiSkuCard: React.FC<{ group: OrderItem[] }> = ({ group }) => {
     );
 };
 
-const DashboardPage: React.FC<DashboardPageProps> = ({ allOrders, scanHistory, stockItems, generalSettings, onBulkUpdateStockItems, subscription, onRefresh }) => {
+const DashboardPage: React.FC<DashboardPageProps> = ({ allOrders, scanHistory, stockItems, generalSettings, onBulkUpdateStockItems, subscription, onRefresh, user }) => {
     const navigate = useNavigate(); 
     
+    const [showOrgModal, setShowOrgModal] = useState(!user?.organization_id);
     const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
     const [isConfigureLowStockModalOpen, setIsConfigureLowStockModalOpen] = useState(false);
     const [infoModalState, setInfoModalState] = useState<{
@@ -366,6 +367,24 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ allOrders, scanHistory, s
                 onClose={() => setIsConfigureLowStockModalOpen(false)}
                 stockItems={stockItems}
                 onSave={onBulkUpdateStockItems}
+            />
+            <CreateOrganizationModal
+                isOpen={showOrgModal}
+                user={user}
+                onCreated={() => {
+                    setShowOrgModal(false);
+                    window.location.reload();
+                }}
+                onClose={() => {
+                    // Optionally prevent closing without creating org
+                    // setShowOrgModal(false);
+                }}
+                onLogout={() => {
+                    // Limpar dados e redirecionar para login
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.href = '/login';
+                }}
             />
         </>
     );

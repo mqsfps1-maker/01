@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LogIn, Loader2, AlertTriangle, UserPlus, Tags, Phone, KeyRound, Mail, ArrowLeft } from 'lucide-react';
+import { Loader2, AlertTriangle, Tags, Mail, ArrowLeft } from 'lucide-react';
 import { dbClient } from '../lib/supabaseClient';
 
 interface LoginPageProps {
@@ -11,13 +11,9 @@ interface LoginPageProps {
 const LoginPage: React.FC<LoginPageProps> = ({ onNavigateToRegister, onNavigateToForgotPassword, onNavigateToLanding }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [phone, setPhone] = useState('');
-    const [token, setToken] = useState('');
-    const [phoneStep, setPhoneStep] = useState<'enter_phone' | 'enter_otp'>('enter_phone');
     
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const [isPhoneLoading, setIsPhoneLoading] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -40,35 +36,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onNavigateToRegister, onNavigateT
     const handleGoogleLogin = async () => {
         await dbClient.auth.signInWithOAuth({ provider: 'google' });
     };
-
-    const handlePhoneLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
-        setIsPhoneLoading(true);
-
-        if (phoneStep === 'enter_phone') {
-            const { error: otpError } = await dbClient.auth.signInWithOtp({
-                phone: `+55${phone.replace(/\D/g, '')}`,
-            });
-            if (otpError) {
-                setError(`Erro ao enviar código: ${otpError.message}`);
-            } else {
-                setPhoneStep('enter_otp');
-            }
-        } else {
-            const { error: verifyError } = await dbClient.auth.verifyOtp({
-                phone: `+55${phone.replace(/\D/g, '')}`,
-                token,
-                type: 'sms',
-            });
-            if (verifyError) {
-                setError(`Código inválido: ${verifyError.message}`);
-            }
-            // On success, onAuthStateChange handles it.
-        }
-        setIsPhoneLoading(false);
-    };
-
 
     return (
         <div className="relative flex flex-col items-center justify-center min-h-screen bg-slate-900 p-4 font-['Inter']">
@@ -108,34 +75,6 @@ const LoginPage: React.FC<LoginPageProps> = ({ onNavigateToRegister, onNavigateT
                             <span className="flex-shrink mx-4 text-xs text-slate-300">OU</span>
                             <div className="flex-grow border-t border-white/20"></div>
                         </div>
-
-                        {/* Phone Login Form */}
-                        <form className="space-y-4" onSubmit={handlePhoneLogin}>
-                             {phoneStep === 'enter_phone' ? (
-                                <div>
-                                    <label htmlFor="phone" className="sr-only">Telefone</label>
-                                    <input id="phone" name="phone" type="tel" autoComplete="tel" required value={phone} onChange={(e) => setPhone(e.target.value)}
-                                        className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 text-white bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
-                                        placeholder="Seu Telefone com DDD" />
-                                </div>
-                            ) : (
-                                 <div>
-                                    <label htmlFor="token" className="sr-only">Código SMS</label>
-                                    <input id="token" name="token" type="text" required value={token} onChange={(e) => setToken(e.target.value)}
-                                        className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 text-white bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
-                                        placeholder="Código recebido por SMS" />
-                                </div>
-                            )}
-                             <button type="submit" disabled={isPhoneLoading} className="w-full flex justify-center py-3 px-4 border border-transparent text-sm font-semibold rounded-lg text-slate-800 bg-slate-200 hover:bg-slate-300 disabled:opacity-70">
-                                {isPhoneLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (phoneStep === 'enter_phone' ? 'Enviar Código' : 'Verificar e Entrar')}
-                            </button>
-                        </form>
-                    </div>
-
-                    <div className="relative flex items-center">
-                        <div className="flex-grow border-t border-white/20"></div>
-                        <span className="flex-shrink mx-4 text-xs text-slate-300">OU</span>
-                        <div className="flex-grow border-t border-white/20"></div>
                     </div>
                     
                     <form className="space-y-4" onSubmit={handleSubmit}>

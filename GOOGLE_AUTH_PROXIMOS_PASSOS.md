@@ -8,7 +8,7 @@
 
 **Arquivo:** `.env.local`
 ```
-VITE_SUPABASE_URL=https://fkialaepfxakgsbshrez.supabase.co
+VITE_SUPABASE_URL=https://gdnmukufvlyeqsasjelx.supabase.co
 VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 VITE_GOOGLE_CLIENT_ID=639844500678-3e34a0rifene0tu5fre2576u9o6fl1ko.apps.googleusercontent.com
 ```
@@ -19,7 +19,7 @@ VITE_GOOGLE_CLIENT_ID=639844500678-3e34a0rifene0tu5fre2576u9o6fl1ko.apps.googleu
 
 ### 1️⃣ Configurar Google Provider no Supabase
 
-**Link:** https://app.supabase.com/project/fkialaepfxakgsbshrez/auth/providers
+**Link:** https://app.supabase.com/project/gdnmukufvlyeqsasjelx/auth/providers
 
 **Passos:**
 
@@ -50,7 +50,7 @@ Google Cloud Console (console.cloud.google.com)
 
 ### 2️⃣ Configurar URL Configuration no Supabase
 
-**Link:** https://app.supabase.com/project/fkialaepfxakgsbshrez/auth/url-configuration
+**Link:** https://app.supabase.com/project/gdnmukufvlyeqsasjelx/auth/url-configuration
 
 **Passos:**
 
@@ -82,7 +82,7 @@ Google Cloud Console (console.cloud.google.com)
 2. APIs & Services → OAuth consent screen
 3. Scroll até "Authorized Redirect URIs"
 4. [+ Add URI] para cada:
-   ├─ https://fkialaepfxakgsbshrez.supabase.co/auth/v1/callback
+   ├─ https://gdnmukufvlyeqsasjelx.supabase.co/auth/v1/callback
    └─ http://localhost:3000/
 5. [SAVE]
 ```
@@ -127,7 +127,7 @@ Deve abrir `http://localhost:3000`
 - [ ] Google Provider habilitado (com Client Secret preenchido)
 - [ ] Site URL = http://localhost:3000
 - [ ] Redirect URLs incluem http://localhost:3000/
-- [ ] Google Cloud: Authorized Redirect URIs incluem fkialaepfxakgsbshrez.supabase.co/auth/v1/callback
+- [ ] Google Cloud: Authorized Redirect URIs incluem gdnmukufvlyeqsasjelx.supabase.co/auth/v1/callback
 - [ ] `npm run dev` executa sem erros
 - [ ] Botão "Entrar com Google" funciona
 - [ ] Novo usuário aparece em Supabase → Users

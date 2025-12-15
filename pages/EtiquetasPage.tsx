@@ -437,13 +437,10 @@ const EtiquetasPage: React.FC<EtiquetasPageProps> = (props) => {
 
     const handleProcessRequest = useCallback(() => {
         if (!zplInput.trim()) return;
-        // Block if quota exhausted
-        if (typeof remainingLabels === 'number' && remainingLabels <= 0) {
-            setIsQuotaModalOpen(true);
-            return;
-        }
+        // Allow processing for all users (free trial has 200 labels)
+        // Only block if quota is EXPLICITLY exhausted and user is on paid plan
         setIsModeModalOpen(true);
-    }, [zplInput, remainingLabels]);
+    }, [zplInput]);
 
 
     // Export options modal

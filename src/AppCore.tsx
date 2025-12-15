@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { dbClient } from './lib/supabaseClient';
+import { getCacheData, setCacheData, clearAllCache } from './lib/dataCache';
 import { resolveScan } from './lib/scanner';
 import { 
     User, ZplSettings, StockItem, StockMovement, OrderItem, EtiquetaHistoryItem, ScanLogItem, 
@@ -15,6 +16,7 @@ import { Plan, Subscription } from './types';
 import Sidebar from './components/Sidebar';
 import MobileHeader from './components/MobileHeader';
 import GlobalHeader from './components/GlobalHeader';
+import InvisibleLoader from './components/InvisibleLoader';
 import DashboardPage from './pages/DashboardPage';
 import ImporterPage from './pages/ImporterPage';
 import EtiquetasPage from './pages/EtiquetasPage';
@@ -138,14 +140,6 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 const trialEndDate = new Date(userCreatedAt);
                 trialEndDate.setDate(trialEndDate.getDate() + trialDurationDays);
 
-                console.log('Subscription Data Check:', {
-                    hasSubData: !!subData,
-                    userCreatedAt: userCreatedAt.toISOString(),
-                    trialEndDate: trialEndDate.toISOString(),
-                    now: new Date().toISOString(),
-                    isTrialExpired: new Date().getTime() > trialEndDate.getTime()
-                });
-
                 const defaultSubscription = {
                     status: 'trialing',
                     plan: { name: 'Plano Grátis (Teste)', max_users: 2, price: 0, label_limit: 200 },
@@ -225,18 +219,18 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 if (planning) _setPlanningSettings(prev => ({...prev, ...planning.value}));
 
                 const results = await Promise.all([
-                    dbClient.from('stock_items').select('*'),
-                    dbClient.from('stock_movements').select('*'),
-                    dbClient.from('orders').select('*'),
-                    dbClient.from('etiquetas_historico').select('*'),
-                    dbClient.from('scan_logs').select('*'),
-                    dbClient.from('import_history').select('*'),
-                    dbClient.from('product_boms').select('*'),
-                    dbClient.from('customers').select('*'),
-                    dbClient.from('production_plans').select('*'),
-                    dbClient.from('shopping_list_items').select('*'),
-                    dbClient.from('users').select('*'),
-                    dbClient.from('sku_links').select('*')
+                    dbClient.from('stock_items').select('*').limit(500),
+                    dbClient.from('stock_movements').select('*').order('created_at', {ascending: false}).limit(1000),
+                    dbClient.from('orders').select('*').order('created_at', {ascending: false}).limit(1000),
+                    dbClient.from('etiquetas_historico').select('*').order('created_at', {ascending: false}).limit(100),
+                    dbClient.from('scan_logs').select('*').order('scanned_at', {ascending: false}).limit(500),
+                    dbClient.from('import_history').select('*').order('processed_at', {ascending: false}).limit(100),
+                    dbClient.from('product_boms').select('*').limit(500),
+                    dbClient.from('customers').select('*').limit(500),
+                    dbClient.from('production_plans').select('*').limit(100),
+                    dbClient.from('shopping_list_items').select('*').limit(500),
+                    dbClient.from('users').select('*').limit(100),
+                    dbClient.from('sku_links').select('*').limit(1000)
                 ]);
 
                 const [
@@ -267,10 +261,11 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 setUsers(usersRes.data || []);
                 setSkuLinks((skuLinksRes.data || []).map((l: any) => ({importedSku: l.imported_sku, masterProductSku: l.master_product_sku})));
                 
-                if (loggedInUser.role === 'DONO_SAAS') {
+                // Carregar planos para admin e gerente
+                if (loggedInUser.role === 'DONO_SAAS' || loggedInUser.role === 'CLIENTE_GERENTE') {
                     const [orgsRes, plansRes, subsRes] = await Promise.all([
                         dbClient.from('organizations').select('*'),
-                        dbClient.from('plans').select('*'),
+                        dbClient.from('plans').select('*').eq('active', true),
                         dbClient.from('subscriptions').select('*'),
                     ]);
 
@@ -323,7 +318,9 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
             channel.on('postgres_changes', { event: '*', schema: 'public', table }, handler);
         });
         channel.subscribe();
-        return () => { dbClient.removeChannel(channel); };
+        // Don't clean up channel on unmount - let it persist for performance
+        // Only unsubscribe when user actually logs out (handled in auth listener)
+        return () => { /* channel cleanup disabled to prevent gray screen */ };
     }, [user, addToast]);
 
       useEffect(() => {
@@ -1001,15 +998,6 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
         const periodEnd = new Date(subscription.period_end).getTime();
         const isTrialExpired = now > periodEnd;
         
-        console.log('Trial Status:', {
-            status: subscription?.status,
-            periodEnd: new Date(subscription.period_end).toISOString(),
-            now: new Date(now).toISOString(),
-            isTrialExpired,
-            isOnSubscriptionOrProfile,
-            pathname: location.pathname
-        });
-        
         if (isTrialExpired && !isOnSubscriptionOrProfile) {
             return (
                 <div className="flex h-screen w-full items-center justify-center bg-[var(--color-bg)]">
@@ -1057,9 +1045,18 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
     if (isEmployee && restrictedPaths.some(path => location.pathname.startsWith(path))) {
         return <Navigate to="/app/dashboard" replace />;
     }
+
+    // Limpar cache automaticamente ao entrar em páginas de dados
+    useEffect(() => {
+        const pathsThatNeedFreshData = ['/app/pedidos', '/app/importer', '/app/estoque', '/app/bipagem'];
+        if (pathsThatNeedFreshData.some(path => location.pathname.startsWith(path))) {
+            clearAllCache();
+        }
+    }, [location.pathname]);
     
     return (
         <div className="flex h-screen bg-[var(--color-bg)]">
+            <InvisibleLoader isLoading={isLoading} />
             <Sidebar 
                 isCollapsed={isSidebarCollapsed} 
                 setIsCollapsed={setIsSidebarCollapsed} 
@@ -1082,7 +1079,7 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 />
                 <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
                     <Routes>
-                        <Route path="dashboard" element={<DashboardPage allOrders={allOrders} scanHistory={scanHistory} stockItems={stockItems} generalSettings={generalSettings} importHistory={importHistory} onBulkUpdateStockItems={handleBulkUpdateStockItems} subscription={subscription} onRefresh={refreshData} />} />
+                        <Route path="dashboard" element={<DashboardPage allOrders={allOrders} scanHistory={scanHistory} stockItems={stockItems} generalSettings={generalSettings} importHistory={importHistory} onBulkUpdateStockItems={handleBulkUpdateStockItems} subscription={subscription} onRefresh={refreshData} user={user} />} />
                         <Route path="importer" element={<ImporterPage allOrders={allOrders} selectedFile={selectedFile} setSelectedFile={setSelectedFile} processedData={processedData} setProcessedData={setProcessedData} error={importerError} setError={setImporterError} isProcessing={isProcessing} setIsProcessing={setIsProcessing} onLaunch={handleLaunch} skuLinks={skuLinks} onLinkSku={handleLinkSku} onUnlinkSku={handleUnlinkSku} products={stockItems} onSaveStockItem={onSaveStockItem as any} onSaveProdutoCombinado={handleSaveProdutoCombinado} produtosCombinados={produtosCombinados} stockItems={stockItems} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} currentUser={user!} importHistory={importHistory} addImportToHistory={handleAddImportToHistory} clearImportHistory={() => setImportHistory([])} onDeleteImportHistoryItem={handleDeleteImportHistoryItem} addToast={addToast} customers={customers} unlinkedSkus={[]} />} />
                         <Route path="etiquetas" element={<EtiquetasPage settings={etiquetasSettings} onSettingsSave={setEtiquetasSettings} stockItems={stockItems} etiquetasState={etiquetasState} setEtiquetasState={setEtiquetasState} currentUser={user!} allOrders={allOrders} setAllOrders={setAllOrders} etiquetasHistory={etiquetasHistory} onSaveHistory={handleSaveEtiquetaHistory} onSaveStockItem={onSaveStockItem as any} generalSettings={generalSettings} setGeneralSettings={setGeneralSettings as any} skuLinks={skuLinks} scanHistory={scanHistory} labelProcessingStatus={labelProcessingStatus} setLabelProcessingStatus={setLabelProcessingStatus} addToast={addToast} onLabelsUsed={refreshData} remainingLabels={remainingLabels} />} />
                         <Route path="pedidos" element={<PedidosPage allOrders={allOrders} scanHistory={scanHistory} setAllOrders={setAllOrders} setScanHistory={setScanHistory} currentUser={user!} generalSettings={generalSettings} addToast={addToast} onDeleteOrders={handleDeleteOrders} />} />

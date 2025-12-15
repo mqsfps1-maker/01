@@ -375,7 +375,6 @@ export const AUTOCREATE_ERP_TABLES_SQL = `
 DO $$
 DECLARE
   missing_count INT := 0;
-  t record;
 BEGIN
   -- Certifique-se de que a extensão de UUID está disponível
   PERFORM 1 FROM pg_extension WHERE extname = 'uuid-ossp';

@@ -3,8 +3,8 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User } from '../types';
 
 // Hardcoded Supabase credentials as requested
-export const supabaseUrl = 'https://fkialaepfxakgsbshrez.supabase.co';
-const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZraWFsYWVwZnhha2dzYnNocmV6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzNTY0MjAsImV4cCI6MjA3ODkzMjQyMH0.yGfxacvS7ysjFWWAs3SNDUctLRm4iiYKt75Jc9fj7z4';
+export const supabaseUrl = 'https://gdnmukufvlyeqsasjelx.supabase.co';
+const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdkbm11a3Vmdmx5ZXFzYXNqZWx4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4MTk5NjUsImV4cCI6MjA4MTM5NTk2NX0.TBPAlWcB9UKQ_eqo-ak7unxxDzoREN_FdQNnoHE71PU';
 
 /**
  * The single, pre-configured Supabase client for the entire application.

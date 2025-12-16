@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { UserPlus, Loader2, AlertTriangle, LogIn, Tags, Phone, KeyRound, Mail, User as UserIcon, Building, ArrowLeft, CheckCircle } from 'lucide-react';
+import { Loader2, AlertTriangle, Tags, Mail, User as UserIcon, ArrowLeft, CheckCircle } from 'lucide-react';
 import { User } from '../types';
 import { dbClient } from '../lib/supabaseClient';
 
@@ -13,7 +13,6 @@ interface RegisterPageProps {
 const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateToLogin, addToast, onNavigateToLanding }) => {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-    const [phone, setPhone] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitted, setIsSubmitted] = useState(false);
@@ -29,19 +28,17 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateToLogin, addToast
             return;
         }
 
-        const { error: authError } = await dbClient.auth.signUp({
+        console.log('[RegisterPage] Tentando cadastro com:', email);
+        const { data, error: authError } = await dbClient.auth.signUp({
             email,
             password,
-            options: {
-                data: {
-                    phone: phone, 
-                }
-            }
         });
 
         if (authError) {
+            console.error('[RegisterPage] Erro de cadastro:', authError);
             setError(authError.message);
         } else {
+            console.log('[RegisterPage] Cadastro bem-sucedido:', data);
             setIsSubmitted(true);
         }
         
@@ -49,7 +46,18 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateToLogin, addToast
     };
 
     const handleGoogleRegister = async () => {
-        await dbClient.auth.signInWithOAuth({ provider: 'google' });
+        setIsLoading(true);
+        try {
+            await dbClient.auth.signInWithOAuth({ 
+                provider: 'google',
+                options: {
+                    redirectTo: `${window.location.origin}/#/app/dashboard`
+                }
+            });
+        } catch (err) {
+            setError('Erro ao fazer login com Google');
+            setIsLoading(false);
+        }
     };
 
     if (isSubmitted) {
@@ -123,12 +131,7 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateToLogin, addToast
                                 className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 text-white bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
                                 placeholder="Seu melhor e-mail para login" />
                         </div>
-                         <div>
-                            <label htmlFor="phone" className="sr-only">Telefone</label>
-                            <input id="phone" name="phone" type="tel" autoComplete="tel" required value={phone} onChange={(e) => setPhone(e.target.value)}
-                                className="appearance-none relative block w-full px-4 py-3 border placeholder-slate-400 text-white bg-white/10 border-white/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm transition"
-                                placeholder="Telefone com DDD" />
-                        </div>
+ 
                         <div>
                             <label htmlFor="password" className="sr-only">Senha</label>
                             <input id="password" name="password" type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)}

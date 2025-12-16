@@ -20,21 +20,40 @@ const LoginPage: React.FC<LoginPageProps> = ({ onNavigateToRegister, onNavigateT
         setError('');
         setIsLoading(true);
 
-        const { error: signInError } = await dbClient.auth.signInWithPassword({
+        console.log('[LoginPage] Tentando login com:', email);
+        const { data, error: signInError } = await dbClient.auth.signInWithPassword({
             email,
             password,
         });
 
         if (signInError) {
+            console.error('[LoginPage] Erro de login:', signInError);
             setError('Email ou senha inválidos. Verifique suas credenciais.');
-        } 
-        // On success, the onAuthStateChange listener in App.tsx will handle the navigation.
+        } else {
+            console.log('[LoginPage] Login bem-sucedido:', data);
+        }
 
         setIsLoading(false);
     };
 
     const handleGoogleLogin = async () => {
-        await dbClient.auth.signInWithOAuth({ provider: 'google' });
+        setError('');
+        setIsLoading(true);
+        try {
+            const { error } = await dbClient.auth.signInWithOAuth({ 
+                provider: 'google',
+                options: {
+                    redirectTo: `${window.location.origin}/#/app/dashboard`
+                }
+            });
+            if (error) {
+                setError('Erro ao fazer login com Google: ' + error.message);
+                setIsLoading(false);
+            }
+        } catch (err: any) {
+            setError('Erro ao conectar com Google');
+            setIsLoading(false);
+        }
     };
 
     return (

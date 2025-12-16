@@ -1,15 +1,13 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { dbClient } from './lib/supabaseClient';
 import { User } from './types';
 import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
-import OnboardingPage from './pages/OnboardingPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import UpdatePasswordPage from './pages/UpdatePasswordPage';
-import AppCore from './AppCore';
+import AppCore from './src/AppCore';
 import { Loader2, AlertTriangle, LogOut, RefreshCw, XCircle } from 'lucide-react';
 import ToastContainer from './components/ToastContainer';
 import ResetPage from './pages/ResetPage';
@@ -17,6 +15,10 @@ import SetPasswordPage from './pages/SetPasswordPage';
 import EmailConfirmedPage from './pages/EmailConfirmedPage';
 import InviteAcceptedPage from './pages/InviteAcceptedPage';
 import SuccessSubscriptionModal from './components/SuccessSubscriptionModal';
+
+// Lazy loading para páginas não críticas
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
+const UpdatePasswordPage = lazy(() => import('./pages/UpdatePasswordPage'));
 
 // --- Componentes Auxiliares ---
 
@@ -129,15 +131,14 @@ const App: React.FC = () => {
 
     const fetchUserProfile = async (userId: string): Promise<User | null> => {
         try {
+            console.log('[fetchUserProfile] Buscando perfil para:', userId);
             const { data, error } = await dbClient.from('users').select('*').eq('id', userId).single();
             
-            if (data) {
-                return data as User;
-            }
-            
             if (error) {
+                console.error('[fetchUserProfile] Erro ao buscar:', error);
                 // Se for erro PGRST116 (não encontrado) ou 403 (RLS)
                 if (error.code === 'PGRST116' || error.code === 'PGRST0' || error.message.includes('permission denied') || error.message.includes('No rows found')) {
+                    console.log('[fetchUserProfile] Usuário não existe na DB, criando perfil temporário');
                     const { data: authUser } = await dbClient.auth.getUser();
                     if (authUser?.user) {
                         const newProfile: User = {
@@ -147,12 +148,11 @@ const App: React.FC = () => {
                             phone: '',
                             role: 'CLIENTE_GERENTE',
                             organization_id: null,
-                            cpf_cnpj: '',
-                            auth_provider: authUser.user.user_metadata?.provider || 'email',
+                            cpfCnpj: '',
                             ui_settings: null,
                             setor: [],
                             prefix: '',
-                            attendance: null,
+                            attendance: [],
                             avatar: '',
                             has_set_password: false,
                             created_at: new Date().toISOString(),
@@ -163,8 +163,10 @@ const App: React.FC = () => {
                 }
             }
             
-            return null;
+            console.log('[fetchUserProfile] Perfil encontrado:', data);
+            return data as User;
         } catch (err: any) {
+            console.error('[fetchUserProfile] Exceção:', err);
             return null;
         }
     };
@@ -213,6 +215,7 @@ const App: React.FC = () => {
         let redirectTimeout: NodeJS.Timeout;
 
         const { data: { subscription } } = dbClient.auth.onAuthStateChange(async (event, session) => {
+            console.log('[App] Auth event:', event, 'Session user:', session?.user?.email);
             if (!mounted) return;
             
             if (event === 'SIGNED_OUT') {
@@ -230,7 +233,9 @@ const App: React.FC = () => {
                 }
                 
                 try {
+                    console.log('[App] Buscando perfil para user:', session.user.id);
                     const profile = await fetchUserProfile(session.user.id);
+                    console.log('[App] Perfil encontrado:', profile);
                     if (mounted) {
                         if (profile) {
                             // Se usuário não tem organização, NÃO criar automaticamente
@@ -316,9 +321,9 @@ const App: React.FC = () => {
     return (
         <>
             <Routes>
-                {/* Apenas usuários autenticados COM organization_id vão para dashboard */}
+                {/* Se logado (com ou sem org) vai para dashboard. Se não logado vai para landing */}
                 <Route path="/" element={
-                    (user && user.organization_id) ? <Navigate to="/app/dashboard" /> : <LandingPage onLogin={() => navigate('/login')} onRegister={() => navigate('/register')} />
+                    user ? <Navigate to="/app/dashboard" replace /> : <LandingPage onLogin={() => navigate('/login')} onRegister={() => navigate('/register')} />
                 } />
                 
                 <Route path="/login" element={<PublicRoute user={user} isLoading={isLoading}><LoginPage onNavigateToRegister={() => navigate('/register')} onNavigateToForgotPassword={() => navigate('/forgot-password')} onNavigateToLanding={() => navigate('/')} /></PublicRoute>} />
@@ -346,7 +351,11 @@ const App: React.FC = () => {
                     </ProtectedRoute>
                 } />
 
-                <Route path="/update-password" element={<UpdatePasswordPage onPasswordUpdated={() => { addToast('Senha atualizada!', 'success'); navigate('/login'); }} />} />
+                <Route path="/update-password" element={
+                    <Suspense fallback={<AppLoader message="Carregando..." onCancel={() => navigate('/login')} />}>
+                        <UpdatePasswordPage onPasswordUpdated={() => { addToast('Senha atualizada!', 'success'); navigate('/login'); }} />
+                    </Suspense>
+                } />
 
                 <Route path="/app/*" element={
                     <ProtectedRoute user={user} isLoading={isLoading}>

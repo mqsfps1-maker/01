@@ -1,41 +1,41 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
-import { dbClient } from './lib/supabaseClient';
-import { getCacheData, setCacheData, clearAllCache } from './lib/dataCache';
-import { resolveScan } from './lib/scanner';
+import { dbClient } from '../lib/supabaseClient';
+import { getCacheData, setCacheData, clearAllCache } from '../lib/dataCache';
+import { resolveScan } from '../lib/scanner';
 import { 
     User, ZplSettings, StockItem, StockMovement, OrderItem, EtiquetaHistoryItem, ScanLogItem, 
     GeneralSettings, ImportHistoryItem, ProdutoCombinado, Customer, SkuLink, ProductionPlan, 
     ShoppingListItem, PlanningParameters, LabelProcessingStatus, ProcessedData, EtiquetasState, 
     UserSetor, UserRole, ScanResult, UiSettings, defaultZplSettings, defaultGeneralSettings 
-} from './types';
-import { Plan, Subscription } from './types';
+} from '../types';
+import { Plan, Subscription } from '../types';
 
-import Sidebar from './components/Sidebar';
-import MobileHeader from './components/MobileHeader';
-import GlobalHeader from './components/GlobalHeader';
-import InvisibleLoader from './components/InvisibleLoader';
-import DashboardPage from './pages/DashboardPage';
-import ImporterPage from './pages/ImporterPage';
-import EtiquetasPage from './pages/EtiquetasPage';
-import PedidosPage from './pages/PedidosPage';
-import BipagemPage from './pages/BipagemPage';
-import ProductPage from './pages/ProductPage';
-import ClientesPage from './pages/ClientesPage';
-import AjudaPage from './pages/AjudaPage';
-import PlanejamentoPage from './pages/PlanejamentoPage';
-import ComprasPage from './pages/ComprasPage';
-import SubscriptionPage from './pages/SubscriptionPage';
-import ConfiguracoesPage from './pages/ConfiguracoesPage';
-import ConfiguracoesGeraisPage from './pages/ConfiguracoesGeraisPage';
-import FuncionariosPage from './pages/FuncionariosPage';
-import ProfilePage from './pages/ProfilePage';
-import AdminMetricsPage from './pages/AdminMetricsPage';
-import BiDashboardPage from './pages/BiDashboardPage';
-import MoagemPage from './pages/MoagemPage';
-import EstoquePage from './pages/EstoquePage';
+import Sidebar from '../components/Sidebar';
+import MobileHeader from '../components/MobileHeader';
+import GlobalHeader from '../components/GlobalHeader';
+import InvisibleLoader from '../components/InvisibleLoader';
+import DashboardPage from '../pages/DashboardPage';
+import ImporterPage from '../pages/ImporterPage';
+import EtiquetasPage from '../pages/EtiquetasPage';
+import PedidosPage from '../pages/PedidosPage';
+import BipagemPage from '../pages/BipagemPage';
+import ProductPage from '../pages/ProductPage';
+import ClientesPage from '../pages/ClientesPage';
+import AjudaPage from '../pages/AjudaPage';
+import PlanejamentoPage from '../pages/PlanejamentoPage';
+import ComprasPage from '../pages/ComprasPage';
+import SubscriptionPage from '../pages/SubscriptionPage';
+import ConfiguracoesPage from '../pages/ConfiguracoesPage';
+import ConfiguracoesGeraisPage from '../pages/ConfiguracoesGeraisPage';
+import FuncionariosPage from '../pages/FuncionariosPage';
+import ProfilePage from '../pages/ProfilePage';
+import AdminMetricsPage from '../pages/AdminMetricsPage';
+import BiDashboardPage from '../pages/BiDashboardPage';
+import MoagemPage from '../pages/MoagemPage';
+import EstoquePage from '../pages/EstoquePage';
 
 // Mock for UpgradePromptModal if not available
 const UpgradePromptModal = ({ isOpen, onClose, onUpgradeClick, onSnooze, type, daysLeft }: any) => {
@@ -135,9 +135,9 @@ const AppCore: React.FC<AppCoreProps> = ({ user, setUser, addToast }) => {
                 const subData = subRes.data;
                 const appSettings = settingsRes.data || [];
 
-                const userCreatedAt = new Date(loggedInUser.created_at || new Date().toISOString());
+                // Trial duration: 7 days from NOW (not from creation date)
                 const trialDurationDays = 7;
-                const trialEndDate = new Date(userCreatedAt);
+                const trialEndDate = new Date();
                 trialEndDate.setDate(trialEndDate.getDate() + trialDurationDays);
 
                 const defaultSubscription = {
